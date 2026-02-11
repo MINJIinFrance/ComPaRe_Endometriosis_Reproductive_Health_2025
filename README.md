@@ -15,9 +15,11 @@ The study investigates the reproductive journey and pregnancy outcomes of women 
 * **Data Management:** * Cleaning and merging complex longitudinal data from multiple patient-reported questionnaires (PROMs).
     * Handling missing data using **missForest** (Random Forest-based imputation).
 * **Statistical Modeling:**
+    * **Assumption Test** : For each model
     * **Binary Logistic Regression**: For live birth and general complication factors.
-    * **Multinomial Logistic Regression**: For categorized obstetrical complication types.
+    * **Multinominal Logistic Regression**: For categorized obstetrical complication types.
     * **Validation**: Multicollinearity assessment via Variance Inflation Factor (VIF).
+    * **Sensitivity analysis** : CCA vs Imputed Dataset
 
 ## 📂 Repository Structure
 ```text
