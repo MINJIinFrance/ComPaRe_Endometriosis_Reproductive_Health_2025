@@ -1,0 +1,2286 @@
+---
+title: "01_clean_module_grossesse"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_module_grossesse without ongoning pregnancies
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-04-09
+*Date of update* : 2025-06-16
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+Information after selecting just 'terminated pregnancies'
+ - 1107 patients : New module = 
+ - 1619 pregnancies : New  module= 515 , Old module= 1104 
+ 
+$Libraries$ 
+```{r}
+library(dplyr)
+library(readr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+# Original : 1955 Idpreg, 1402 id_unik
+grossesse <- read.csv(
+  "Complic_pop_Module_grossesse_20250407.csv",
+  fileEncoding = "latin1",
+  colClasses = c(Sexe = "character"))
+
+#-----------------------------------------------------
+# Replace cells with nothing or spaces with NA and
+# Replace non-standard apostrophes with standard ones 
+#-----------------------------------------------------
+grossesse <- grossesse %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), ~na_if(trimws(.), " ")),
+         across(everything(), ~ gsub("\u0092", "'", .)))%>% 
+  mutate_all(~str_trim(.))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- grossesse %>% sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(grossesse)) %>% as.vector() # index of columns having only NA
+grossesse <- grossesse[,-index_col_NA]
+
+#---------------------------------
+# Outlier : DateDebut et DateFin  : A LOT 
+#---------------------------------
+# 1. Character to 'date' data
+grossesse <-  grossesse %>%
+  mutate(across(starts_with("Date"), 
+                ~ as.Date(.,format="%d/%m/%Y")))
+
+# 2. Correct some evident outliers
+grossesse <- grossesse %>%
+  mutate(
+    DateDebut = case_when(
+      # outlier : 8015-03-30-> 2015-03-30
+      id_unik == "3B44783A6F2E5375F12F" ~ as.Date("2015-03-30"),
+      # outlier : DateDebut== 2002-01-18 -> 2001-05-01
+      id_unik == "77746B417C56728035D3" ~ as.Date("2001-05-01"),
+      # outlier : DateDebut=="2024-09-03" -> "2024-08-14"
+      IdPregnancy=="PRG_5522" ~ as.Date("2024-08-14"),
+      # outlier : DateDebut 2019-08-08-> 2018-08-08
+      IdPregnancy=="PRG_1401" ~ as.Date("2018-08-08"),
+      # outlier : DateDebut 2023-05-11->2022-05-11
+      IdPregnancy=="PRG_4358" ~ as.Date("2022-05-11"),
+      # outlier  : DateDebut 2023-06-15 -> 2022-06-15
+      IdPregnancy=="PRG_4056" ~ as.Date("2022-06-15"),
+      #outlier  : DateDebut 2019-08-08 -> 2018-08-08
+      IdPregnancy=="PRG_1401" ~ as.Date("2018-08-08"),
+      # outlier : DateDebut 2016-07-01 -> 2015-07-01
+      IdPregnancy =="PRG_4081" ~as.Date("2015-07-01"),
+      # outlier : DateDebut 2022-12-14 -> 2021-12-14
+      IdPregnancy=="PRG_4204"~ as.Date("2021-12-14"),
+      # outlier : DateDebut 2007-11-10 -> 2006-11-10
+      IdPregnancy=="PRG_3973"~ as.Date("2006-11-10"),
+      # outlier : DateDebut 2019-08-08 -> 2018-08-08
+      IdPregnancy=="PRG_1401" ~ as.Date("2018-08-08"),
+      # outlier : DateDebut 2019-08-04 -> 2018-08-04
+      IdPregnancy=="PRG_2385" ~ as.Date("2018-08-04"),
+      # outlier : DateDebut 2018-05-25 -> 2017-05-25
+      IdPregnancy=="PRG_400" ~ as.Date("2017-05-25"),
+      # outlier : DateDebut 2018-05-27 -> 2017-05-27
+      IdPregnancy=="PRG_453" ~ as.Date("2017-05-27"),
+      # outlier : DateDebut 2018-05-20 -> 2017-05-20
+      IdPregnancy=="PRG_1549" ~ as.Date("2017-05-20"),
+      # outlier : DateDebut 2017-05-02 -> 2016-05-02
+      IdPregnancy=="PRG_345" ~ as.Date("2016-05-02"),
+      # outlier : DateDebut 2021-06-14 -> 2020-06-14
+      IdPregnancy=="PRG_2894" ~ as.Date("2020-06-14"),
+      # outlier : DateDebut 2020-07-07 -> 2019-07-07
+      IdPregnancy=="PRG_1907" ~ as.Date("2019-07-07"),
+      # outlier : DateDebut 2016-04-15 -> 2015-04-15
+      IdPregnancy=="PRG_2740" ~ as.Date("2015-04-15"),
+      IdPregnancy =="PRG_1471" ~ DateFin,
+      # outlier : DateDebut 2019-10-13 -> 2020-10-13
+      IdPregnancy=="PRG_2101" ~ as.Date("2020-10-13"),
+      # outlier : DateDebut 2018-10-17 -> 2020-10-17
+      IdPregnancy=="PRG_2288" ~ as.Date("2020-10-17"),
+      # outlier : DateDebut 2021-11-05 -> 2022-11-05
+      IdPregnancy=="PRG_2935" ~ as.Date("2022-11-05"),
+      # outlier : 2012-04-15 -> 2014-04-15
+      IdPregnancy=="PRG_586" ~ as.Date("2014-04-15"),
+      # outlier : 2019-01-23 -> 2020-01-23
+      IdPregnancy=="PRG_1097" ~ as.Date("2020-01-23"),
+      
+      IdPregnancy== "PRG_2360" ~ as.Date("2018-12-01"),
+      # outlier : 2016-09-07 -> 2017-09-07
+      IdPregnancy=="PRG_1118" ~ as.Date("2017-09-07"),
+      # outlier : 2015-02-26 -> 2016-02-26
+      IdPregnancy=="PRG_2861" ~ as.Date("2016-02-26"),
+      # outlier : 2019-01-25 -> 2020-01-25
+      IdPregnancy=="PRG_1075" ~ as.Date("2020-01-25"),
+      TRUE ~ DateDebut
+    ),
+    DateFin = case_when(
+      # outlier : 3020-01-15 -> 2020-01-15
+      id_unik == "4EBAFCACC71D96FF1C77" ~ as.Date("2020-01-15"),
+      # outlier : 2013-10-20 -> 2023-10-20
+      IdPregnancy=="PRG_4099" ~ as.Date("2023-10-20"),
+      # outlier : DateFin == 2001-05-01 -> 2002-01-18
+      id_unik == "77746B417C56728035D3" ~ as.Date("2002-01-18"),
+      # outlier : 2016-01-08 -> 2018-01-08
+      IdPregnancy=="PRG_544" ~ as.Date("2018-01-08"),
+      # outlier : 2023-01-07 -> 2024-01-07
+      IdPregnancy=="PRG_5158" ~ as.Date("2024-01-07"),
+      # outlier : DateFin=="2024-08-14" -> "2024-09-03" 
+      IdPregnancy=="PRG_5522" ~ as.Date("2024-09-03"),
+      
+      IdPregnancy =="PRG_1471" ~ DateDebut,
+      IdPregnancy== "PRG_2360" ~ as.Date("2019-01-08"),
+      TRUE ~ DateFin
+    )
+  )
+
+# # outlier : 8015-03-30-> 2015-03-30
+# grossesse$DateDebut[grossesse$id_unik=="3B44783A6F2E5375F12F"]<- "2015-03-30"
+# # outlier : 3020-01-15 -> 2020-01-15
+# grossesse$DateFin[grossesse$id_unik=="4EBAFCACC71D96FF1C77"]<- "2020-01-15"
+# # outlier : IdPregnancy=="PRG_4099" 2013-10-20 -> 2023-10-20
+# grossesse$DateFin[grossesse$id_unik=="C7C8E9716FF7B28E1B5F"] <- "2023-10-20"
+# # outlier : DateDebut== 2002-01-18 , DateFin ==2001-05-01 -> change each other
+# grossesse$DateDebut[grossesse$id_unik=="77746B417C56728035D3"] <- "2001-05-01"
+# grossesse$DateFin[grossesse$id_unik=="77746B417C56728035D3"] <- "2002-01-18"
+# semaine_amenor : -71 -> PRG_544 DateFin== as.Date("2018-01-08") 
+# semaine_amenor : -39 ->C47B5E8F7A3572590AC5 and PRG_5158 DateFin== as.Date("2024-01-07")
+# semaine_amenor : -3 -> AFF39127F8E135C14FBF and PRG_5522 DateFin==as.Date("2024-09-03") and DateDebut=as.Date("2024-08-14")
+# PRG_1401 : DateDebut 2019-08-08-> 2018-08-08
+# PRG_4358 : DateDebut 2023-05-11->2022-05-11
+# PRG_4056 : DateDebut 2023-06-15 -> 2022-06-15
+#PRG_1401 : DateDebut 2019-08-08 -> 2018-08-08
+# PRG_4081: DateDebut 2016-07-01 -> 2015-07-01
+# PRG_4204 : DateDebut 2022-12-14 -> 2021-12-14
+# PRG_3973 : DateDebut 2007-11-10 -> 2006-11-10
+
+#-------------------------------------------
+# Outlier : moyen duration of breastfeeding 
+#--------------------------------------------
+# - maximum 120
+grossesse$mois_allaitement %>% as.numeric() %>% summary() 
+
+# Correct the outlier : 120/30 jours -> 4 mois  (confirmé par Marina)
+grossesse$mois_allaitement[grossesse$id_unik=="5747A857A42403B262AC"] <- 4
+
+#--------------------------------------------------
+#  Delete some repetead rows (중복된 임신 데이터를 제거)
+# Same pregnancies with a little bit different date
+#--------------------------------------------------
+# 1. Check if there are some repeted data
+grossesse %>%
+  group_by(id_unik, DateFin) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+# 2. Remove STRANGE DATA
+# 9A38939EB57EAEF9B2EA (3) : same DateFin (-PRG_5825, - PRG_5800)
+# D1E2C77AE3BC83F50613 (3) : same DateFin (-PRG_5742, - PRG_5744)
+# 38C1703D0D31744BBF95 (5) : same DateFin but different DateDebut (- PRG_2392)
+# Same Pregnancy but ongoing pregnancy at the moment of first response
+# 161650AB86A4BF788555 (2) : DateDebut 09/03/2024  (-PRG_5252)
+grossesse_mod2 <- grossesse %>%
+  filter(!IdPregnancy %in% 
+           c("PRG_5825", "PRG_5800", "PRG_5744", "PRG_5742", "PRG_5252"))
+
+# # + Alternative method
+# # Like some rows having the same information of pregnancies but different IdPregnancy 
+# # - DateFin est un champ obligatoire et DateDebut n'est pas obligatoire
+# grossesse_mod2 <- grossesse %>% 
+#   distinct(id_unik,DateFin, .keep_all = TRUE) 
+
+#-------------------------------
+#      Ongoing pregnancy        
+# : 369 femmes et 369 grossesses = 367 en cours + 2 (pas de réponse)
+#-------------------------------
+# In new module : 104 pregnancies + 2 Pas de réponse 
+# In old module : 263 pregnancies
+
+# 1. Create a temporary dataframe 
+new_dataframe <- grossesse_mod2 %>% 
+  # DateDebut exists but DateFin, terme2,fin2,issue2 don't 
+  filter(is.na(DateFin) & is.na(terme2) & is.na(fin2) & is.na(issue2)) %>% 
+  distinct(id_unik,IdPregnancy,DateDebut,DateFin,DateCreation,DateModification,Debut_1_2,Vivant,terme2) %>% 
+  mutate(SA_estime = round(as.numeric(DateCreation - DateDebut) / 7 + 2),
+         grossesse_encours= 
+           case_when(
+             as.numeric(SA_estime)<= 42 ~ "Oui",
+             as.numeric(SA_estime) > 42 ~ "Pas de reponse",
+             TRUE ~ NA_character_
+           )
+  )
+
+# 2. Add new variable to the main dataset 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe %>% dplyr::select(IdPregnancy, grossesse_encours),
+            by="IdPregnancy")
+
+# 3. Add new class 'Non' to the new variable 'grossesse_encours'
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(grossesse_encours=
+           case_when(
+             !is.na(grossesse_encours) ~ grossesse_encours,
+             is.na(grossesse_encours) ~ "Non",
+             TRUE~ NA_character_
+           ))
+
+# 4. Delete the temporary dataframe 
+rm(new_dataframe)
+
+#-----------------------------------
+#    Filter ongoing pregnancies
+#-----------------------------------
+grossesse_mod2 <- grossesse_mod2 %>%
+  filter(grossesse_encours=="Non")%>% 
+  dplyr::select(-grossesse_encours) %>% 
+  distinct()  
+
+test <-  grossesse_mod2
+#write.csv(grossesse_mod2, "V2_grossesse_mod2.csv")
+#test <- read.csv("V2_grossesse_mod2.csv")
+```
+
+
+*INFORMATION* after cleaning up the data
+- 1113 patients
+- 1575 pregnancies
+
+```{r}
+grossesse_mod2 %>% distinct(id_unik) %>% n_distinct() # 1113 patients
+grossesse_mod2 %>% distinct(IdPregnancy) %>% n_distinct() #1575 preg
+```
+
+
+# I. Preprocessing Data
+
+```{r}
+#--------------------------------------------------------
+# New 'DateDebut' with data of 'amenorrhee' and 'FinMois'
+#--------------------------------------------------------
+# Semaine de grossesse = Semaine d'amenorrhee -2
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(
+    # DateFin - (number of amenorrhea - 2)*7 days = probable DateDebut(Date de debut de grossesse)
+    DateDebut_grossesse = DateFin - (as.numeric(amenorrhee)-2) * 7,
+    
+    # DateFin - number of FinMois days = probable DateDebut (if DateDebut is missing)
+    Finjours = as.numeric(FinMois) * 30,
+    DateDebut_FinMois = DateFin - Finjours,
+    
+    # Create a new variable with original data, DateDebut_amenorrhee, and DateDebut_FinMois data
+    merged_DateDebut = case_when(
+      !is.na(DateDebut) ~ DateDebut,
+      !is.na(DateDebut_grossesse)& is.na(DateDebut_FinMois) ~
+        DateDebut_grossesse,
+      is.na(DateDebut) & is.na(DateDebut_grossesse) & !is.na(DateDebut_FinMois) ~
+        DateDebut_FinMois,
+      TRUE ~ as.Date(NA)
+    )
+  ) %>% 
+  dplyr::select(-DateDebut_grossesse, -Finjours, -DateDebut_FinMois)
+
+#-----------------------------------------------
+#  Weeks of amenorrhea = End Date - start Date  
+#-----------------------------------------------
+#  There are a lot of strange data
+# 1. Calculate weeks of amenorrhea by using Date data
+# SA = SG (=DateFin-DateDebut) + 2
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(preg_jours = as.numeric(difftime(DateFin, merged_DateDebut, 
+                                          units = "days")),
+         semaine_amenor = round(preg_jours / 7)+2) %>% 
+  dplyr::select(-preg_jours)
+
+
+# 2. Correct strange datas
+# It's normal to have some strange data because of incomplete information from old module 
+# So I don't take your time to all correct 
+
+# 3. Merge this new variable to amenorrhee variable
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    amenorrhee = as.numeric(amenorrhee),
+    amenorrhea_final =
+      case_when(
+        terme2 == "Oui" & is.na(semaine_amenor) ~
+          amenorrhee,
+        terme2 == "Oui" & !is.na(semaine_amenor) & semaine_amenor > 0 ~
+          semaine_amenor,
+        terme2 == "Oui" & !is.na(semaine_amenor) & semaine_amenor < 0 ~
+          amenorrhee,
+        (terme2 == "Non" | is.na(terme2)) & !is.na(semaine_amenor) ~
+          semaine_amenor,
+        TRUE ~ NA_real_
+      )
+  )
+
+# 4. Correct some outliers 
+#66902F57FCB43D60994B & PRG_4657: 4 -> 42
+grossesse_mod2$amenorrhea_final[grossesse_mod2$id_unik=="66902F57FCB43D60994B"] <- 42
+#99F6B8BA60CD0ED959EB & PRG_5326 : 2 -> 50 
+grossesse_mod2$amenorrhea_final[grossesse_mod2$IdPregnancy=="PRG_5326"] <- 50
+
+# 5. Just check just for the participants in the new module
+# Because there are lots of bizarre data in the old module in terms of Date data
+grossesse_mod2$amenorrhea_final[grossesse_mod2$terme2=="Oui"] %>% table()
+
+#-------------------------------
+#      Ongoing pregnancy        
+# : 369 femmes et 369 grossesses = 367 en cours + 2 (pas de réponse)
+#-------------------------------
+# In new module : 104 pregnancies + 2 Pas de réponse 
+# In old module : 263 pregnancies
+
+# 1. Create a temporary dataframe 
+new_dataframe <- grossesse_mod2 %>% 
+  # DateDebut exists but DateFin, terme2,fin2,issue2 don't 
+  filter(!is.na(DateDebut) & is.na(DateFin) & is.na(terme2) & is.na(fin2) & is.na(issue2)) %>% 
+  dplyr::select(id_unik,IdPregnancy,DateDebut,DateCreation,DateModification,Debut_1_2,Vivant,terme2) %>% 
+  mutate(SA_estime = round(as.numeric(DateCreation - DateDebut) / 7 + 2),
+         grossesse_encours= 
+           case_when(
+             as.numeric(SA_estime)<= 42 ~ "Oui",
+             as.numeric(SA_estime) > 42 ~ "Pas de reponse",
+             TRUE ~ NA_character_
+           )
+  )
+
+# 2. Add new variable to the main dataset 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe %>% dplyr::select(IdPregnancy, grossesse_encours), by="IdPregnancy")
+
+# 3. Add new class 'Non' to the new variable 'grossesse_encours'
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(grossesse_encours=
+           case_when(
+             !is.na(grossesse_encours) ~ grossesse_encours,
+             is.na(grossesse_encours) ~ "Non",
+             TRUE~ NA_character_
+           ))
+
+# 4. Delete the temporary dataframe 
+rm(new_dataframe)
+
+#-------------------------------------
+#  Correction of variable terme2
+#-------------------------------------
+# PRG_3699 : terme2 =="Non"
+grossesse_mod2$terme2[grossesse_mod2$IdPregnancy=="PRG_3699"] <- "Non"
+
+#----------------------------------------
+#       Terme/incomplete pregnancy
+#----------------------------------------
+# status_terme_all 
+# status_terme_onlynew
+# live_birth_bin_all
+# live_birth_bin_onlynew
+# type_preg_all
+# type_preg_all_simple 
+# type_preg_onlynew
+# type_preg_onlynew_simple
+#----------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    # 1. Create a binary variable : Terme / Incomplete
+    # 1-1) Consider 'fin2' with just two class (Terme, Incomplete)
+    status_terme_all =
+      case_when(
+        terme2 == "Oui" ~ "Terme",
+        terme2=="Non" ~ "Incomplete",
+        is.na(terme2) & fin2 != "Naissance" ~ "Incomplete",
+        is.na(terme2) & fin2=="Naissance" ~ "Terme",
+        TRUE ~NA_character_
+      ),
+    # 1-2) Don't consider 'fin2' (just new module)
+    status_terme_onlynew = 
+      case_when(
+        terme2 == "Oui" ~ "Terme",
+        terme2=="Non" ~ "Incomplete",
+        TRUE ~NA_character_
+      ),
+    # 1-3) Consider only old module
+    status_terme_onlyold = 
+      case_when(
+        fin2=="Naissance"~ "Terme",
+        fin2!="Naissance" ~ "Incomplete",
+        TRUE ~NA_character_
+      ),
+    
+    # 2. Create a binary variable : Live Birth Yes or No (both modules)
+    # 2-1) both modules
+    live_birth_bin_all = 
+      case_when(
+        status_terme_all=="Terme" ~ "Oui",
+        status_terme_all=="Incomplete"~ "Non",
+        TRUE ~ NA_character_
+      ),
+    # 2-2) only new module
+    live_birth_bin_onlynew = 
+      case_when(
+        status_terme_onlynew=="Terme" ~ "Oui",
+        status_terme_onlynew=="Incomplete"~ "Non",
+        TRUE ~ NA_character_
+      ),
+    # 2-3) only old module
+    live_birth_bin_onlyold= 
+      case_when(
+        status_terme_onlyold=="Terme" ~ "Oui",
+        status_terme_onlyold== "Incomplete" ~ "Non",
+        TRUE ~ NA_character_
+      ),
+    
+    # 3. Create a categorical variable : fullterm/preterm and different types of incomplete pregnancies
+    # 3-1) Consider 'fin2' (both modules)
+    type_preg_all = 
+      case_when(
+        status_terme_all=="Terme"  & amenorrhea_final >= 37 ~ "Fullterm",
+        status_terme_all=="Terme"  & amenorrhea_final < 37 ~ "Preterm",
+        status_terme_all=="Incomplete" & is.na(terme2) ~ fin2,
+        status_terme_all=="Incomplete" & terme2=="Non" & is.na(fin2) &
+          issue2 %in%c("Fausse-couche", 
+                       "Grossesse extra-utérine (par ex : grossesse dans la trompe de Fallope)",
+                       "Grossesse môlaire",
+                       "Autre")~ issue2,
+        status_terme_all=="Incomplete" & terme2=="Non" & is.na(fin2)&
+          issue2== "Interruption volontaire de grossesse (IVG)"~"IVG",
+        status_terme_all=="Incomplete" & terme2=="Non" & is.na(fin2)&
+          issue2== "Interruption médicale de grossesse (IMG)" ~ "IMG",
+        TRUE ~NA_character_
+      ),
+    
+    type_preg_all_simple= 
+      case_when(
+        type_preg_all %in% c("Grossesse extra-utérine (par ex : grossesse dans la trompe de Fallope)",
+                            "Grossesse môlaire",
+                            "Mort foetale intra-uterine",
+                            "Autre") ~"Autre",
+        type_preg_all %in% c("IMG","IVG") ~ "IVG/IMG",
+        TRUE ~ type_preg_all
+      ),
+    
+    # 3-2) Don't consider 'fin2' (just new module)
+    type_preg_onlynew = 
+      case_when(
+        status_terme_onlynew=="Terme"  & amenorrhea_final >= 37 ~ "Fullterm",
+        status_terme_onlynew=="Terme" & amenorrhea_final < 37 ~ "Preterm",
+        status_terme_onlynew=="Incomplete" & 
+          issue2 %in%
+          c("Fausse-couche", 
+            "Grossesse extra-utérine (par ex : grossesse dans la trompe de Fallope)",
+            "Grossesse môlaire",
+            "Autre")~ issue2,
+        status_terme_onlynew=="Incomplete" &
+          issue2== "Interruption volontaire de grossesse (IVG)" ~ "IVG",
+        status_terme_onlynew=="Incomplete" &
+          issue2== "Interruption médicale de grossesse (IMG)" ~ "IMG",
+        TRUE ~NA_character_
+      ),
+    
+    type_preg_onlynew_simple= 
+      case_when(
+        type_preg_onlynew %in% c("Grossesse extra-utérine (par ex : grossesse dans la trompe de Fallope)",
+                            "Grossesse môlaire",
+                            "Mort foetale intra-uterine",
+                            "Autre") ~"Autre",
+        type_preg_onlynew %in% c("IMG","IVG") ~ "IVG/IMG",
+        TRUE ~ type_preg_onlynew
+      ),
+  ) 
+
+#-------------------------------
+#   Live birth at least once    : Binary
+#-------------------------------
+# 1. Create a temporary dataframe
+new_dataframe <- grossesse_mod2 %>% 
+  group_by(id_unik) %>% 
+  mutate(live_birth_bin_atleast_once_all = 
+           case_when(any(live_birth_bin_all=="Oui")~ "Oui",
+                     all(live_birth_bin_all=="Non")~ "Non",
+                     TRUE ~ NA_character_),
+         live_birth_bin_atleast_once_onlynew=
+           case_when(any(live_birth_bin_onlynew=="Oui")~"Oui",
+                     all(live_birth_bin_onlynew=="Non")~"Non",
+                     TRUE ~ NA_character_)
+  ) %>% 
+  ungroup %>% 
+  distinct(id_unik, live_birth_bin_atleast_once_all,live_birth_bin_atleast_once_onlynew)
+
+# 2. Add the new variable to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe,by="id_unik")
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+#-------------------------------------------
+#    Number of live births per patient
+#-------------------------------------------
+# 1. Create a new dataframe for informations : Number of live births
+# - all : both modules
+# - onlynew :only new module for the sensitivity analysis
+new_dataframe <- grossesse_mod2 %>% 
+  group_by(id_unik) %>% 
+  summarise(
+    nb_live_births_all= sum(live_birth_bin_all == "Oui", 
+                            na.rm = TRUE),
+    nb_live_births_onlynew= sum(live_birth_bin_onlynew == "Oui", 
+                                na.rm = TRUE)) %>% 
+  ungroup %>% 
+  distinct(id_unik,nb_live_births_all,nb_live_births_onlynew)
+
+# 2. Add these informations to main dataset 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, by="id_unik") 
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+# 4. Create a new variable : number of live births in old module
+grossesse_mod2 <- grossesse_mod2%>% 
+  mutate(
+    nb_live_births_onlyold = ifelse(module == "Ancien", 
+                                nb_live_births_all - nb_live_births_onlynew, 
+                                NA)
+    ) 
+
+
+#---------------------------------------
+#     Number of incomplet pregnancy    
+#---------------------------------------
+# 1. Create a new dataframe for informations : Number of incomplet pregnancy
+# - Consider 'fin2' : nb_incomplete_preg_pt_all
+# - Don't consider 'fin2' : nb_incomplete_preg_pt_onlynew
+new_dataframe <- grossesse_mod2 %>%
+  group_by(id_unik) %>% 
+  summarise(nb_incomplete_preg_pt_all=sum(status_terme_all=="Incomplete",
+                                          na.rm=TRUE),
+            nb_incomplete_preg_pt_onlynew=sum(status_terme_onlynew=="Incomplete",
+                                              na.rm=TRUE)
+  ) %>%
+  ungroup %>%
+  distinct(id_unik, nb_incomplete_preg_pt_all,nb_incomplete_preg_pt_onlynew)
+
+# 2. Add these information to main dataset 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+#-------------------------------------
+#    Number of total pregnancies    : all modules
+#-------------------------------------
+# 1) ALL MODULES
+# 1-1) Create a new dataframe
+new_dataframe <- grossesse_mod2 %>% 
+  distinct(id_unik, IdPregnancy) %>% 
+  group_by(id_unik) %>% 
+  summarise(nb_total_gross = n(), .groups = "drop") %>% 
+  ungroup()
+
+# 1-2) Add the information to main dataset 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, 
+            by="id_unik")
+
+# 1-3) Delete the temporary dataframe
+rm(new_dataframe)
+
+# 2. ONLY NEW MODULE
+# 2-1) Create a new dataframe
+new_dataframe <- grossesse_mod2 %>%
+  filter(module=="Nouveau") %>% 
+  distinct(id_unik, IdPregnancy) %>% 
+  group_by(id_unik) %>% 
+  summarise(nb_total_gross_NewModule = n(), .groups = "drop") %>% 
+  ungroup()
+
+# 2-2) Add the information to main dataset 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, 
+            by="id_unik")
+
+# 2-3) Delete the temporary dataframe
+rm(new_dataframe)
+
+
+# 3. ONLY OLD MODULE
+# 3-1) Create a new dataframe
+new_dataframe <- grossesse_mod2 %>%
+  filter(module=="Ancien") %>% 
+  distinct(id_unik, IdPregnancy) %>% 
+  group_by(id_unik) %>% 
+  summarise(nb_total_gross_OldModule = n(), .groups = "drop") %>% 
+  ungroup()
+
+# 3-2) Add the information to main dataset 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, 
+            by="id_unik")
+
+# 3-3) Delete the temporary dataframe
+rm(new_dataframe)
+
+#------------------------------------
+#       Live birth rate (%)
+#------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(taux_LB_ALL_all= nb_live_births_all/nb_total_gross,
+         taux_LB_ALL_onlynew= nb_live_births_onlynew/nb_total_gross,
+         taux_LB_NEWMODULE= nb_live_births_onlynew/ nb_total_gross_NewModule)
+
+#--------------------------------------------------------------------------
+#  Maternal age at the time of pregnancy termination for each pregnancy
+#--------------------------------------------------------------------------
+#  Why did I use DateFin? because DateDebut isn't mandatory to answer so I find DateFin more fiable
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(age_maternal = as.numeric(
+    difftime(DateFin, Date_naissance, units = "days")) /365)
+grossesse_mod2$age_maternal <- grossesse_mod2$age_maternal %>% round(1)
+
+#--------------------------------------------
+# Maternal age for first and last pregnancy
+#--------------------------------------------
+# For the only one pregnancy, I just calculated the first maternal age (not last maternal age)
+
+# 1.Create a var maternal age for the last pregnancy only if the number of preg >1
+new_dataframe <- grossesse_mod2 %>%
+  group_by(id_unik) %>%
+  arrange(merged_DateDebut) %>% 
+  mutate(first_preg_age = first(age_maternal),
+         last_preg_age = last(age_maternal)) %>%
+  ungroup() %>%
+  distinct(id_unik, first_preg_age, last_preg_age)
+
+
+# 2. Add new variables to the main dataframe and create a new variable 
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe, by="id_unik") %>% 
+  # Create a new var : maternal age for the last pregnancy only if the number of preg >1
+  mutate(
+    last_preg_age_mod = case_when(
+      nb_total_gross == 1 ~ NA_real_, 
+      nb_total_gross > 1 ~ last_preg_age,
+      TRUE ~ NA_real_ 
+    )
+  ) 
+
+# 3. Remove the unnecessary variable
+grossesse_mod2 <- grossesse_mod2 %>% 
+  dplyr::select(-last_preg_age)
+
+# 4. Delete the temporary dataframe 
+rm(new_dataframe)
+
+#-------------------------------------------------------------
+# 1. Conception method : Modifications of variables 
+#-------------------------------------------------------------
+# 1. Modify 'Debut_1_2'
+# 1-1) Debut_1_2 :  Only the use of medications without IVF or IUI
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    Debut_1_2 =
+      case_when(
+        Debut_1_2 == "Médicaments pour stimuler l'ovulation (ex: Clomid,clomifène..)" &
+          Debut_2_2 %in% c("Fécondation in vitro", "Insémination artificielle") ~ Debut_2_2,
+        
+        Debut_1_2 != "Médicaments pour stimuler l'ovulation (ex: Clomid,clomifène..)" ~ Debut_1_2,
+        
+        Debut_1_2 == "Médicaments pour stimuler l'ovulation (ex: Clomid,clomifène..)" ~ "Médicaments pour stimuler l'ovulation (ex: Clomid,clomifène..)",
+        TRUE ~ NA_character_
+      ) 
+  )
+
+# 1-2) Modify "Autre" values in 'Debut_1_2'
+grossesse_mod2$Debut_1_2[grossesse_mod2$IdPregnancy=="PRG_2538"] <-
+  "Insémination artificielle"
+grossesse_mod2$Debut_1_2[grossesse_mod2$IdPregnancy=="PRG_4859"] <- 
+  "Opération / chirurgie"
+grossesse_mod2$Debut_1_2[grossesse_mod2$IdPregnancy=="PRG_4126"] <- 
+  "Fécondation in vitro"
+
+# 2. Modify 'Debut_2_2'
+# 2-1) Modify 'Autre' values in the variable 'Debut_2_2' by replacing them with 'DebutAutre'
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(Debut_2_2 = case_when(
+    id_unik == "C3E5E0D3EF41F43E06DA" ~ "Opération / chirurgie",
+    id_unik == "D5BF37850C416F9EAD9B" ~ "Opération / chirurgie",
+    Debut_2_2 == "Autre" ~ NA_character_,
+    !is.na(Debut_2_2) & Debut_2_2 != "Autre" ~ Debut_2_2,
+    TRUE ~ NA_character_
+  ))
+
+# 2-2) If Debut_1_2 == Debut_2_2, set Debut_2_2 to NA
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    Debut_2_2 = case_when(
+      Debut_1_2 == Debut_2_2 ~ NA_character_,
+      Debut_1_2 != Debut_2_2 ~ Debut_2_2,
+      TRUE ~ NA_character_
+    )
+  )
+
+#---------------------------------------
+#  2. Conception method per Patient
+#---------------------------------------
+# 1. Create a temporary dataframe for a new variable ('methode_conception') by transforming wide format -> long format
+new_dataframe1 <- grossesse_mod2 %>%
+  dplyr::select(id_unik, starts_with("Debut_")) %>%
+  pivot_longer(cols = starts_with("Debut_"), 
+               values_drop_na = TRUE) %>%
+  distinct(id_unik, value) %>%
+  mutate(
+    methode_conception_long_perID = case_when(
+      value %in% c("Conception naturelle") ~ "Naturelle",
+      value %in% c("Médicaments pour stimuler l'ovulation (ex: Clomid,clomifène..)") ~ "Medicament_sans_PMA",
+      value %in% c("Insémination artificielle") ~ "IUI",
+      value %in% c("Fécondation in vitro") ~ "IVF",
+      value %in% c("Opération / chirurgie") ~ "Operation",
+      value %in% c("Autre") ~ "Autre",
+      value %in% c("Je ne m'en souviens plus",
+                   "Je ne souhaite pas répondre") ~ "nsp",
+      TRUE ~ NA_character_
+    )) %>%
+  filter(!is.na(methode_conception_long_perID)) %>%
+  distinct(id_unik, methode_conception_long_perID)
+
+# 2. Create a separate column for the "methode_conception" value
+new_dataframe2 <- new_dataframe1 %>% 
+  filter(!is.na(methode_conception_long_perID)) %>%
+  mutate(value = TRUE) %>%  
+  pivot_wider(
+    names_from = methode_conception_long_perID,  
+    values_from = value,  
+    values_fill = list(value = FALSE),  
+    names_prefix = "methode_perID_" 
+  )
+
+# 3. Put the new variable into main dataframe 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe1, by="id_unik") %>% 
+  left_join(new_dataframe2, by="id_unik")
+
+# 4. Delete two temporary dataframes
+rm(new_dataframe1);rm(new_dataframe2)
+
+#-------------------------------------------------------
+# 2-1. Conception method per Patient : binary(Yes/NO)
+#-------------------------------------------------------
+# Only naturelle conception is 'Non' among all pregnancies
+# At least once, if patients exprienced different type of conception method like IUI, IVF, Medications or operation, the value would be "Oui"
+
+# 1. Create a termporarydataframe for new variables in binary
+new_dataframe <- grossesse_mod2 %>% 
+  distinct(id_unik, methode_conception_long_perID) %>% 
+  mutate(Methode_conception_bin_perID=
+           ifelse(methode_conception_long_perID=="Naturelle",0,1)) %>%
+  group_by(id_unik) %>%
+  mutate(somme= sum(Methode_conception_bin_perID),
+         Methode_conception_bin_perID= ifelse(somme>0, "Avec méthodes", "Naturelle")) %>%  
+  ungroup %>% 
+  distinct(id_unik, Methode_conception_bin_perID)
+
+# 2. Add new variable to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe, by="id_unik")
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+#-----------------------------------------------------------------------------------
+# 2-2. Conception method per Patient : Different combination of conception method
+#-----------------------------------------------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    methode_conception_perID_cat = case_when(
+      # Unique method
+      methode_perID_Naturelle == TRUE &
+        !methode_perID_IUI &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "Naturelle seule",
+      methode_perID_IUI == TRUE &
+        !methode_perID_Naturelle &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "IUI seule",
+      methode_perID_IVF == TRUE &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "IVF seule",
+      methode_perID_Medicament_sans_PMA == TRUE &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI &
+        !methode_perID_IVF &
+        !methode_perID_Operation ~ "Médicaments sans PMA seule",
+      methode_perID_Operation == TRUE &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA ~ "Opération seule",
+      
+      # Two methods
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "Naturelle + IUI",
+      methode_perID_Naturelle &
+        methode_perID_IVF &
+        !methode_perID_IUI &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "Naturelle + IVF",
+      methode_perID_Naturelle &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_IUI &
+        !methode_perID_IVF &
+        !methode_perID_Operation ~ "Naturelle + Médicaments",
+      methode_perID_Naturelle &
+        methode_perID_Operation &
+        !methode_perID_IUI &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA ~ "Naturelle + Opération",
+      methode_perID_IUI &
+        methode_perID_IVF &
+        !methode_perID_Naturelle &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "IUI + IVF",
+      methode_perID_IUI &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_Naturelle &
+        !methode_perID_IVF &
+        !methode_perID_Operation ~ "IUI + Médicaments",
+      methode_perID_IUI &
+        methode_perID_Operation &
+        !methode_perID_Naturelle &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA ~ "IUI + Opération",
+      methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI &
+        !methode_perID_Operation ~ "IVF + Médicaments",
+      methode_perID_IVF &
+        methode_perID_Operation &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI &
+        !methode_perID_Medicament_sans_PMA ~ "IVF + Opération",
+      methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI &
+        !methode_perID_IVF ~ "Médicaments + Opération",
+      
+      # Three methods
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "Naturelle + IUI + IVF",
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_IVF &
+        !methode_perID_Operation ~ "Naturelle + IUI + Médicaments",
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_Operation &
+        !methode_perID_IVF &
+        !methode_perID_Medicament_sans_PMA ~ "Naturelle + IUI + Opération",
+      methode_perID_Naturelle &
+        methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_IUI &
+        !methode_perID_Operation ~ "Naturelle + IVF + Médicaments",
+      methode_perID_Naturelle &
+        methode_perID_IVF &
+        methode_perID_Operation &
+        !methode_perID_IUI &
+        !methode_perID_Medicament_sans_PMA ~ "Naturelle + IVF + Opération",
+      methode_perID_Naturelle &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_IUI &
+        !methode_perID_IVF ~ "Naturelle + Médicaments + Opération",
+      methode_perID_IUI &
+        methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_Naturelle &
+        !methode_perID_Operation ~ "IUI + IVF + Médicaments",
+      methode_perID_IUI &
+        methode_perID_IVF &
+        methode_perID_Operation &
+        !methode_perID_Naturelle &
+        !methode_perID_Medicament_sans_PMA ~ "IUI + IVF + Opération",
+      methode_perID_IUI &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_Naturelle &
+        !methode_perID_IVF ~ "IUI + Médicaments + Opération",
+      methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_Naturelle &
+        !methode_perID_IUI ~ "IVF + Médicaments + Opération",
+      
+      # Four methods
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        !methode_perID_Operation ~ "Naturelle + IUI + IVF + Médicaments",
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_IVF &
+        methode_perID_Operation &
+        !methode_perID_Medicament_sans_PMA ~ "Naturelle + IUI + IVF + Opération",
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_IVF ~ "Naturelle + IUI + Médicaments + Opération",
+      methode_perID_Naturelle &
+        methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_IUI ~ "Naturelle + IVF + Médicaments + Opération",
+      methode_perID_IUI &
+        methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation &
+        !methode_perID_Naturelle ~ "IUI + IVF + Médicaments + Opération",
+      
+      # All methods
+      methode_perID_Naturelle &
+        methode_perID_IUI &
+        methode_perID_IVF &
+        methode_perID_Medicament_sans_PMA &
+        methode_perID_Operation ~ "Toutes méthodes combinées",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+#----------------------------------------------------------
+# 2-3. Simpler categorical variable : Conception method
+#----------------------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(methode_conception_perID_cat_simple=
+           case_when(
+             methode_conception_perID_cat =="Naturelle seule" ~
+               "Naturelle seule",
+             methode_conception_perID_cat%in%c(
+               "Médicaments sans PMA seule",
+               "IVF seule", 
+               "Naturelle + IVF", 
+               "IUI seule",
+               "Naturelle + IUI",
+               "IUI + IVF",
+               "Naturelle + IVF + Médicaments",
+               "Naturelle + Médicaments"
+             ) ~ "PMA/Medicaments",
+             methode_conception_perID_cat%in% c(
+               "Opération seule", 
+               "Naturelle + Opération",
+               "Naturelle + Médicaments + Opération"
+             ) ~ "Operation",
+             methode_conception_perID_cat%in% c(
+               "IVF + Opération", 
+               "IUI + Opération"
+             ) ~ "Operation+PMA",
+             TRUE ~ NA_character_
+           ) %>% as.factor())
+
+#--------------------------------------
+#  3. Conception method per Pregnancy 
+#--------------------------------------
+# 1. Transform wide format to long format with IdPregnancy
+new_dataframe1 <- grossesse_mod2 %>%
+  dplyr::select(IdPregnancy, starts_with("Debut_")) %>% 
+  pivot_longer(cols = starts_with("Debut_"), 
+               values_drop_na = TRUE) %>%
+  distinct(IdPregnancy, value) %>%
+  mutate(
+    methode_conception_long_perPreg = case_when(
+      value %in% c("Conception naturelle") ~ "Naturelle",
+      value %in% c("Médicaments pour stimuler l'ovulation (ex: Clomid,clomifène..)") ~ "Medicament_sans_PMA",
+      value %in% c("Insémination artificielle") ~ "IUI",
+      value %in% c("Fécondation in vitro") ~ "IVF",
+      value %in% c("Opération / chirurgie") ~ "Operation",
+      value %in% c("Autre") ~ "Autre",
+      value %in% c("Je ne souhaite pas répondre", 
+                   "Je ne m'en souviens plus")~ "nsp",
+      TRUE ~ NA_character_
+    )) %>%
+  filter(!is.na(methode_conception_long_perPreg)) %>%
+  distinct(IdPregnancy, methode_conception_long_perPreg)
+
+# 2. Create a separate column for the "methode_conception" value
+new_dataframe2 <- new_dataframe1 %>% 
+  filter(!is.na(methode_conception_long_perPreg)) %>%
+  mutate(value = TRUE) %>%  
+  pivot_wider(
+    names_from = methode_conception_long_perPreg,  
+    values_from = value,  
+    values_fill = list(value = FALSE),  
+    names_prefix = "methode_perPreg_" 
+  )
+
+# 5. Merge the new variables into the main dataframe 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe1, by="IdPregnancy") %>% 
+  left_join(new_dataframe2, by="IdPregnancy")
+
+# 6. Delete temporary dataframes
+rm(new_dataframe1); rm(new_dataframe2)
+
+#-------------------------------------------------------
+# 3-1. Conception method per Patient : binary(Yes/NO)
+#-------------------------------------------------------
+# Create binary variable for conception method
+new_dataframe <- grossesse_mod2 %>%
+  distinct(IdPregnancy, methode_conception_long_perPreg) %>%
+  mutate(
+    Methode_conception_bin_perPreg =
+      ifelse(methode_conception_long_perPreg == "Naturelle", 0, 1)
+  ) %>%
+  group_by(IdPregnancy) %>%
+  mutate(
+    somme = sum(Methode_conception_bin_perPreg),
+    Methode_conception_bin_perPreg = ifelse(somme > 0, "Oui", "Non")
+  ) %>%
+  ungroup() %>%
+  distinct(IdPregnancy, Methode_conception_bin_perPreg)
+
+# 2. Add the binary variable to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe, by="IdPregnancy")
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+#-----------------------------------------------------------------------------------
+# 3-2. Conception method per Pregnancy : Different combination of conception method
+#-----------------------------------------------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    methode_conception_perPreg_cat = case_when(
+      # Unique method
+      methode_perPreg_Naturelle == TRUE &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "Naturelle seule",
+      methode_perPreg_IUI == TRUE &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "IUI seule",
+      methode_perPreg_IVF == TRUE &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "IVF seule",
+      methode_perPreg_Medicament_sans_PMA == TRUE &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Operation ~ "Médicaments sans PMA seule",
+      methode_perPreg_Operation == TRUE &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA ~ "Opération seule",
+      
+      # Two methods
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "Naturelle + IUI",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IVF &
+        !methode_perPreg_IUI &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "Naturelle + IVF",
+      methode_perPreg_Naturelle &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Operation ~ "Naturelle + Médicaments",
+      methode_perPreg_Naturelle &
+        methode_perPreg_Operation &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA ~ "Naturelle + Opération",
+      methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "IUI + IVF",
+      methode_perPreg_IUI &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Operation ~ "IUI + Médicaments",
+      methode_perPreg_IUI &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA ~ "IUI + Opération",
+      methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI &
+        !methode_perPreg_Operation ~ "IVF + Médicaments",
+      methode_perPreg_IVF &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI &
+        !methode_perPreg_Medicament_sans_PMA ~ "IVF + Opération",
+      methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF ~ "Médicaments + Opération",
+      
+      # Three methods
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "Naturelle + IUI + IVF",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Operation ~ "Naturelle + IUI + Médicaments",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_Operation &
+        !methode_perPreg_IVF &
+        !methode_perPreg_Medicament_sans_PMA ~ "Naturelle + IUI + Opération",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_IUI &
+        !methode_perPreg_Operation ~ "Naturelle + IVF + Médicaments",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IVF &
+        methode_perPreg_Operation &
+        !methode_perPreg_IUI &
+        !methode_perPreg_Medicament_sans_PMA ~ "Naturelle + IVF + Opération",
+      methode_perPreg_Naturelle &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_IUI &
+        !methode_perPreg_IVF ~ "Naturelle + Médicaments + Opération",
+      methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_Operation ~ "IUI + IVF + Médicaments",
+      methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_Medicament_sans_PMA ~ "IUI + IVF + Opération",
+      methode_perPreg_IUI &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IVF ~ "IUI + Médicaments + Opération",
+      methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle &
+        !methode_perPreg_IUI ~ "IVF + Médicaments + Opération",
+      
+      # Four methods
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        !methode_perPreg_Operation ~ "Naturelle + IUI + IVF + Médicaments",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        methode_perPreg_Operation &
+        !methode_perPreg_Medicament_sans_PMA ~ "Naturelle + IUI + IVF + Opération",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_IVF ~ "Naturelle + IUI + Médicaments + Opération",
+      methode_perPreg_Naturelle &
+        methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_IUI ~ "Naturelle + IVF + Médicaments + Opération",
+      methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation &
+        !methode_perPreg_Naturelle ~ "IUI + IVF + Médicaments + Opération",
+      
+      # All methods
+      methode_perPreg_Naturelle &
+        methode_perPreg_IUI &
+        methode_perPreg_IVF &
+        methode_perPreg_Medicament_sans_PMA &
+        methode_perPreg_Operation ~ "Toutes méthodes combinées",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+#----------------------------------------------------------
+# 3-3. Simpler categorical variable : Conception method
+#----------------------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(methode_conception_perPreg_cat_simple=
+           case_when(
+             methode_conception_perPreg_cat  =="Naturelle seule" ~
+               "Naturelle seule",
+             methode_conception_perPreg_cat %in%c(
+               "Médicaments sans PMA seule",
+               "IVF seule", 
+               "Naturelle + IVF", 
+               "IUI seule",
+               "Naturelle + IUI",
+               "IUI + IVF",
+               "Naturelle + IVF + Médicaments",
+               "Naturelle + Médicaments"
+             ) ~ "PMA/Medicaments",
+             methode_conception_perPreg_cat %in% c(
+               "Opération seule", 
+               "Naturelle + Opération",
+               "Naturelle + Médicaments + Opération"
+             ) ~ "Operation",
+             methode_conception_perPreg_cat %in% c(
+               "IVF + Opération", 
+               "IUI + Opération"
+             ) ~ "Operation+PMA",
+             TRUE ~ NA_character_
+           ) %>% as.factor())
+
+
+#------------------------
+#   Mode of delivery
+#------------------------
+# 1. Simplify values of two variables :
+# - Binary mode of delivery : Voie basse and Césarienne 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(Mode_accouchement= 
+           case_when(
+             accouchement2=="Voie basse/vaginale" ~ "Voie basse",
+             accouchement2 %in%c("Césarienne d'urgence",
+                                 "Césarienne programmée") ~"Césarienne",
+             TRUE~ NA_character_
+           )
+  ) 
+
+# 2. Make a temporary dataframe in order to create a separate column for the "mode_accouchement" value
+new_dataframe <- grossesse_mod2 %>% 
+  distinct(id_unik, Mode_accouchement) %>% 
+  filter(!is.na(Mode_accouchement)) %>%
+  mutate(value = TRUE) %>%  
+  pivot_wider(
+    names_from = Mode_accouchement, 
+    values_from = value,  
+    values_fill = list(value = FALSE),  
+    names_prefix = "mode_" 
+  )
+# 2-1) Rename second column 
+new_dataframe <- new_dataframe %>%
+  rename(mode_Voie_basse = colnames(new_dataframe)[2])
+
+# 3. Add these new variables to the main dataframe 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 4. Delete the temporary dataframe 
+rm(new_dataframe)
+
+# 5. Create again a temporary dataframe 
+new_dataframe <- grossesse_mod2 %>% 
+  distinct(id_unik, Mode_accouchement,live_birth_bin_atleast_once_all) %>% 
+  group_by(id_unik) %>% 
+  mutate(
+    Mode_accouchement_perID= 
+           case_when(
+             live_birth_bin_atleast_once_all=="Non" ~"No_delivery",
+             all(is.na(Mode_accouchement)) ~NA_character_,
+             all(Mode_accouchement=="Voie basse", na.rm=TRUE) ~ 
+               "Seule voie Basse",
+             all(Mode_accouchement=="Césarienne", na.rm=TRUE) ~
+               "Seule Césarienne",
+             any(Mode_accouchement=="Voie basse") &
+               any(Mode_accouchement=="Césarienne") ~
+               "Both",
+             TRUE ~ NA_character_
+             )
+         )
+
+# 6. Add the new varaible to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe %>% distinct(id_unik, Mode_accouchement_perID),
+            by="id_unik")
+
+#--------------------------------------------
+# Dummy variables for the mode of delivery 
+#--------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(
+    VD_perID = case_when(
+      Mode_accouchement_perID == "Seule voie Basse" ~ "Oui",
+      Mode_accouchement_perID == "Both" ~ "Oui",
+      Mode_accouchement_perID != "Seule voie Basse"&
+        Mode_accouchement_perID != "Both" ~ "Non",
+      Mode_accouchement_perID=="No_delivery" ~ "Non",
+      TRUE ~NA_character_
+    ),
+    
+    Csection_perID = case_when(
+      Mode_accouchement_perID == "Seule Césarienne" ~ "Oui",
+      Mode_accouchement_perID == "Both" ~ "Oui",
+      Mode_accouchement_perID != "Seule Césarienne"&
+        Mode_accouchement_perID != "Both" ~ "Non",
+      Mode_accouchement_perID=="No_delivery" ~ "Non",
+      TRUE ~NA_character_
+    )
+  )
+
+#---------------------------
+#    Labor of childbirth
+#---------------------------
+# 1. Simplify the values of variable 'travail2'
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(Travail_accouchement= 
+           case_when(
+             travail2=="Travail spontané"~ "Travail spontané",
+             travail2=="Travail provoqué (déclenchement de l'accouchement par des médicaments et/ou ballonnet)"~ "Travail provoqué",
+             travail2=="Pas de travail" ~ "Pas de travail",
+             TRUE ~NA_character_
+           )
+  )
+
+# 2. Make a temporary dataframe in order to create a separate column for the "Travail_accouchement" value
+new_dataframe <- grossesse_mod2 %>% 
+  distinct(id_unik, Travail_accouchement) %>% 
+  filter(!is.na(Travail_accouchement)) %>%
+  mutate(value = TRUE) %>%  
+  pivot_wider(
+    names_from = Travail_accouchement, 
+    values_from = value,  
+    values_fill = list(value = FALSE)
+  )
+
+# 2-1) Rename second column 
+new_dataframe <- new_dataframe %>%
+  rename(travail_provoque = colnames(new_dataframe)[2],
+         travail_non= colnames(new_dataframe)[3],
+         travail_spontane=colnames(new_dataframe)[4])  
+
+# 3. Add these new variables to the main dataframe 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 4. Delete the temporary dataframe 
+rm(new_dataframe)
+
+# 5. Create a new variable : Travail_accouchement_cat
+grossesse_mod2 <- grossesse_mod2 %>%
+  group_by(id_unik) %>%
+  mutate(
+    Travail_accouchement_perID = case_when(
+      live_birth_bin_atleast_once_all == "Non" ~"No_delivery",
+      all(is.na(Travail_accouchement)) ~ NA_character_,
+      all(Travail_accouchement == "Travail provoqué", na.rm = TRUE) ~ 
+        "Seul travail provoqué",
+      
+      any(Travail_accouchement == "Travail provoqué", na.rm = TRUE) &
+        any(Travail_accouchement == "Pas de travail", na.rm = TRUE) &
+        !any(Travail_accouchement == "Travail spontané", na.rm = TRUE) ~ 
+        "Seul travail provoqué",
+      
+      all(Travail_accouchement == "Travail spontané", na.rm = TRUE) ~ 
+        "Seul travail spontané",
+      
+      any(Travail_accouchement == "Travail spontané", na.rm = TRUE) &
+        any(Travail_accouchement == "Pas de travail", na.rm = TRUE) &
+        !any(Travail_accouchement == "Travail provoqué", na.rm = TRUE) ~ 
+        "Seul travail spontané",
+      
+      all(Travail_accouchement == "Pas de travail", na.rm = TRUE) ~ 
+        "Pas de travail",
+      
+      any(Travail_accouchement == "Travail provoqué", na.rm = TRUE) &
+        any(Travail_accouchement == "Travail spontané", na.rm = TRUE) ~
+        "Travail mixte",
+      TRUE ~ NA_character_
+    ) %>% as.factor()
+  ) %>%
+  ungroup()
+
+#------------------------------------------------------------------------
+# Create dummy variables for the labour information and mode of delivery 
+#------------------------------------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    labour_natural_perID = case_when(
+      Travail_accouchement_perID == "No_delivery" ~"Non",
+      Travail_accouchement_perID == "Seul travail spontané" ~ "Oui",
+      Travail_accouchement_perID != "Seul travail spontané" ~ "Non",
+      Travail_accouchement_perID == "Travail mixte" ~ "Oui",
+      Travail_accouchement_perID == "Pas de travail" ~ "Non",
+      TRUE ~ NA_character_
+    ),
+    labour_induced_perID = case_when(
+      Travail_accouchement_perID == "No_delivery" ~"Non",
+      Travail_accouchement_perID == "Seul travail provoqué" ~ "Oui",
+      Travail_accouchement_perID != "Seul travail provoqué" ~ "Non",
+      Travail_accouchement_perID == "Travail mixte" ~ "Oui",
+      Travail_accouchement_perID == "Pas de travail" ~ "Non",
+      TRUE ~ NA_character_
+      )
+    )
+
+#--------------------------------------------
+#    Number of live births per patient
+#--------------------------------------------
+# 1. Make a temporary dataframe for the total number of live births per patient
+new_dataframe <- grossesse_mod2 %>% 
+  distinct(id_unik, IdPregnancy, Vivant) %>% 
+  group_by(id_unik) %>%  
+  summarise(nb_nevivants_parpt=sum(as.numeric(Vivant), 
+                                 na.rm = TRUE)) %>%
+  ungroup()
+
+# 2. Put a variable 'total number of babies per patient' to the main dataset 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 3. Delete a temporary dataframe 
+rm(new_dataframe)
+
+#-------------------------------------
+# Frequency of patients who breastfed
+#--------------------------------------
+# 1. Create a temporary dataframe to make new variables(continue et binaire)
+new_dataframe <- grossesse_mod2 %>%
+  distinct(id_unik, Allaitement2) %>%
+  group_by(id_unik) %>%
+  mutate(
+    allaitement_YN_atleast =
+      case_when(
+        any(Allaitement2 == "Oui", na.rm = TRUE) ~ "Oui",
+        all(is.na(Allaitement2)) ~ NA_character_,
+        any(Allaitement2 == "Non", na.rm = TRUE) ~ "Non",
+        TRUE ~ NA_character_
+      )
+  ) %>%
+  mutate(
+    nb_allaitement = sum(Allaitement2 == "Oui", na.rm = TRUE),
+    nb_allaitement = ifelse(is.na(allaitement_YN_atleast), NA, nb_allaitement)
+  ) %>%
+  ungroup() %>%
+  distinct(id_unik, allaitement_YN_atleast, nb_allaitement)
+
+# 2. Add new variables to the main dataset and remove an original variable(Allatiement2)
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe, by="id_unik") #%>% 
+  #select(-Allaitement2)
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+#----------------------------------
+# Average duration of breastfeeding
+#----------------------------------
+# 1. mois_allaitement : character to numeric
+grossesse_mod2 <- grossesse_mod2 %>% 
+  mutate(mois_allaitement= as.numeric(mois_allaitement))
+
+# 2.  Correct an outlier : 120 mois -> 120/30jours = 4 mois
+grossesse_mod2 <- grossesse_mod2 %>% mutate(
+  mois_allaitement=case_when(
+    mois_allaitement==120 ~ 4,
+    mois_allaitement!= 120 ~ mois_allaitement,
+    allaitement_YN_atleast=="Non" ~ 0,
+    allaitement_YN_atleast=="Oui" ~ mois_allaitement,
+    TRUE ~ NA_real_
+  )
+)
+# ########
+# # INFO #
+# ########
+# # No information of breast feeding even if participants delivered live births : 54 pregnancies 
+# grossesse_mod2 %>%
+#   distinct(id_unik,IdPregnancy,terme2,Allaitement2,nb_allaitement, allaitement_YN_atleast, mois_allaitement) %>% filter(terme2=="Oui"&is.na(Allaitement2)) 
+# 
+# ###### QUESTION : Is it possible to do the imputation ? for theses NA values
+# 
+# 
+# # Terme & allaitement_YN_atleast& mois_allaitement
+# grossesse_mod2 %>% distinct(id_unik,IdPregnancy, terme2, nb_allaitement,allaitement_YN_atleast, mois_allaitement) %>% filter(terme2=="Oui"&allaitement_YN_atleast=="Oui"&is.na(mois_allaitement))
+
+#------------------------------------------------------------------
+#   Pregnancy management               : 83 respondents
+# among patients who experienced at least one incomplete pregnancy
+#
+# Terme : No pregnancy management 
+# Incomplete : Mode_accouchement is always NA
+#------------------------------------------------------------------
+# 1. Simplify the categories of all variables "PriseCharge_" and modify certain categories according to PriseChargeAutre 
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(across(starts_with("PriseCharge_"), 
+                ~ case_when(
+                  . == "Autre" & PriseChargeAutre == "methotrexate" ~ 
+                    "Médicamenteuse",
+                  . == "Médicamenteuse (comprimés oraux et/ou vaginaux)" ~
+                    "Médicamenteuse",
+                  . == "Autre" & substr(PriseChargeAutre, 1, 6) == "Coelio" ~
+                    "Chirurgicale",
+                  . == "Chirurgicale (curetage/aspiration)" ~ 
+                    "Chirurgicale",
+                  . %in% c("Prise en charge psychologique",
+                           "Absence de prise en charge médicale ou chirurgicale",
+                           "Je ne sais pas", "Autre") ~ .,
+                  TRUE ~ NA_character_
+                )))  %>% 
+  # From PriseCharge_2_2, remove the category "Absence de prise en charge médicale ou chirurgicale" because specific PriseCharge categories exist in PriseCharge_1_2, making the absence category inappropriate
+  mutate(across(setdiff(names(dplyr::select(., starts_with("PriseCharge_"))), "PriseCharge_1_2"),~ ifelse(grepl("^Absence", .), NA_character_, .)))
+
+# 2. Create a variable in long format
+# 2-1) Create a temporary dataframe for the new variable in long format
+new_dataframe <- grossesse_mod2 %>%
+  dplyr::select(id_unik, starts_with("PriseCharge_")) %>%
+  pivot_longer(
+    cols = starts_with("PriseCharge_"), 
+    values_to = "PriseenCharge_long",
+    values_drop_na = TRUE
+  ) %>% 
+  distinct(id_unik, PriseenCharge_long)  
+
+
+# 2-2) Create a new binary variable : Prise en charge Oui/Non
+new_dataframe <- new_dataframe %>% 
+  group_by(id_unik) %>% 
+  mutate(
+    PriseenCharge_bin=
+      case_when(
+        all(PriseenCharge_long==
+              "Absence de prise en charge médicale ou chirurgicale") ~"Non",
+        TRUE ~ "Oui")
+             )
+
+# 2-3) Create another temporary dataframe for a new summarized variable
+new_dataframe1 <- new_dataframe %>%
+  filter(PriseenCharge_long != "Absence de prise en charge médicale ou chirurgicale") %>%
+  group_by(id_unik, PriseenCharge_long) %>% 
+  summarise(n=n(),.groups = "drop") %>%  
+  group_by(id_unik) %>% 
+  summarise(nb_PriseenCharge_perID=sum(n))
+
+# 2-4) Add this new variable to the first temporary dataframe
+new_dataframe <- new_dataframe %>%
+  left_join(new_dataframe1, by = "id_unik") %>%
+  mutate(across(where(is.numeric),~ replace_na(., 0))
+  )
+
+# 2-5) Create a new categorical variable per patient 
+method_labels <- c(
+  "Chirurgicale" = "Seule_Chirurgicale",
+  "Médicamenteuse" = "Seule_Médicamenteuse",
+  "Prise en charge psychologique" = "Seule_Psychologique",
+  "Autre" = "Autre/nsp",
+  "Je ne sais pas" = "Autre/nsp"
+)
+new_dataframe <- new_dataframe %>%
+  mutate(
+    PriseenCharge_cat_perID = case_when(
+      nb_PriseenCharge_perID == 0 ~"Absence",
+      nb_PriseenCharge_perID >= 2 ~ "Multiple",
+      nb_PriseenCharge_perID == 1 ~ method_labels[PriseenCharge_long],
+      TRUE ~ NA_character_
+    )
+  ) %>% 
+  filter(!(PriseenCharge_long == "Absence de prise en charge médicale ou chirurgicale" & nb_PriseenCharge_perID >= 1)) %>% distinct()
+
+# 2-6) Add all theses new variables to the main dataframe 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(new_dataframe, by="id_unik")
+  
+# 2-7) Delete temporary dataframes
+rm(new_dataframe); rm(new_dataframe1)
+
+# 3. Create a variable in wide format
+# 3-1) Create a temporary dataframe
+# : Check whether each patient has received a specific management at least once
+# : 355 patients who experienced at least one incomplete pregnancy
+new_dataframe <- grossesse_mod2 %>% 
+  filter(status_terme_all=="Incomplete") %>% 
+  mutate(any_chirurgicale = if_any(starts_with("PriseCharge_"), ~ . == 
+                                     "Chirurgicale"),
+         any_medicamenteuse = if_any(starts_with("PriseCharge_"), ~ . == 
+                                       "Médicamenteuse"),
+         any_psychologique = if_any(starts_with("PriseCharge_"), ~. == 
+                                      "Prise en charge psychologique")
+  ) %>% 
+  group_by(id_unik) %>%
+  summarise(
+    any_chirurgicale = any(any_chirurgicale, na.rm = TRUE),
+    any_medicamenteuse = any(any_medicamenteuse, na.rm = TRUE),
+    any_psychologique = any(any_psychologique, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+# 3-2) Add new variables to the main dataframe 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, starts_with("any")),
+            by="id_unik")
+
+# 4. Delete original variables (PriseCharge) and the temporary dataframe
+grossesse_mod2 <- grossesse_mod2 %>% 
+  dplyr::select(-starts_with("PriseCharge"))
+rm(new_dataframe)
+
+#-----------------------------------------
+#      Care taken per pregnancy 
+#-----------------------------------------
+# 1. Create a temporary dataframe by selecting necessary variables 
+new_dataframe <- grossesse_mod2 %>%
+  distinct(IdPregnancy, PriseenCharge_long) 
+
+# 2. Count the number of care taken per pregnancy
+new_dataframe1 <- new_dataframe %>% 
+  filter(PriseenCharge_long != "Absence de prise en charge médicale ou chirurgicale") %>%
+  group_by(IdPregnancy, PriseenCharge_long) %>%
+  summarise(n=n(), .groups="drop") %>%
+  group_by(IdPregnancy) %>%
+  summarise(nb_PriseenCharge_perPreg = sum(n), .groups="drop")
+
+# 3. Make a list of labels : Seule/Multiple/Absence/Autre
+method_labels <- c(
+  "Chirurgicale" = "Seule_Chirurgicale",
+  "Médicamenteuse" = "Seule_Médicamenteuse",
+  "Prise en charge psychologique" = "Seule_Psychologique",
+  "Autre" = "Autre/nsp",
+  "Je ne sais pas" = "Autre/nsp"
+)
+
+# 4. Create a new variable 
+new_dataframe <- new_dataframe %>%
+  group_by(IdPregnancy) %>%
+  mutate(n_distinct_types = n_distinct(PriseenCharge_long)) %>%
+  left_join(new_dataframe1, by = "IdPregnancy") %>%
+  mutate(nb_PriseenCharge_perPreg = replace_na(nb_PriseenCharge_perPreg, 0)) %>%
+  mutate(
+    PriseenCharge_cat_perPreg = case_when(
+      nb_PriseenCharge_perPreg == 0 &
+        all(PriseenCharge_long == "Absence de prise en charge médicale ou chirurgicale") ~ "Absence",
+      nb_PriseenCharge_perPreg == 1 ~ method_labels[PriseenCharge_long],
+      nb_PriseenCharge_perPreg >= 2 ~ "Multiple",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  dplyr::select(IdPregnancy, PriseenCharge_cat_perPreg) %>%
+  distinct()
+
+# 5. Add the new variable to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe, by = "IdPregnancy")
+
+# 6. Remove all temporary dataframes 
+rm(new_dataframe); rm(new_dataframe1)
+
+###########################################################
+#--------------------------------------------------
+#   Number of pregnancy complications per pregnancy  :
+#--------------------------------------------------
+ttest <- grossesse_mod2
+
+# 1. Create a list of columns' name
+complication_vars <- paste0("Complication_", 1:6, "_2")
+
+# 2. Complication_value
+new_dataframe <- grossesse_mod2 %>%
+  dplyr::select(id_unik,IdPregnancy, starts_with("Complication_")) %>%
+  pivot_longer(
+    cols = all_of(complication_vars),
+    names_to = "complication_type",
+    values_to = "Complication_value_perPreg"
+  ) %>% 
+  filter(!is.na(Complication_value_perPreg)) %>% 
+  distinct(id_unik,IdPregnancy, Complication_value_perPreg)
+
+# 3. Create complications per pregnancy
+new_dataframe1 <- new_dataframe %>%
+  filter(Complication_value_perPreg != "Aucune complication") %>% 
+  distinct(IdPregnancy, Complication_value_perPreg) %>%            
+  group_by(IdPregnancy) %>%                                       
+  mutate(total_complications_perPreg = n()) %>% 
+  ungroup() %>% 
+  right_join(new_dataframe %>% 
+               group_by(IdPregnancy) %>% 
+               summarise(nb_lignes_complic= n())) %>%
+  mutate(
+    total_complications_perPreg= case_when(
+      nb_lignes_complic==1 & is.na(total_complications_perPreg) ~ 0,
+      TRUE ~ total_complications_perPreg
+      ),
+    Complication_value_perPreg = case_when(
+      nb_lignes_complic==1 & is.na(Complication_value_perPreg) ~ "Aucune complication", 
+      TRUE ~ Complication_value_perPreg
+    ),
+    total_complications_cat_perPreg = case_when(
+      total_complications_perPreg == 0 ~ "0",
+      total_complications_perPreg == 1 ~ "1",
+      total_complications_perPreg >= 2 ~ "2+"
+      ) %>% factor(levels= c("0","1","2+"), ordered = TRUE),
+    total_complications_bin_perPreg = 
+      ifelse(total_complications_perPreg == 0, "Non", "Oui")
+    ) %>% 
+  dplyr::select(-nb_lignes_complic)
+
+# 4. Merge 
+merged_new_dataframe <- new_dataframe %>% 
+  left_join(new_dataframe1 %>%
+              dplyr::select(-Complication_value_perPreg) %>% 
+              distinct(),
+            by="IdPregnancy")
+
+# 5. Add the new variables to the main dataframe 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(merged_new_dataframe %>% dplyr::select(-id_unik), 
+            by="IdPregnancy")
+
+
+#----------------------------------------------
+#  Create individual complication type variable 
+#----------------------------------------------
+# 5. Create a new variable by using the merged_new_dataframe 
+merged_new_dataframe2 <- merged_new_dataframe %>% 
+  group_by(id_unik) %>% 
+  summarise(
+    complications = unique(Complication_value_perPreg),
+    .groups = "drop"
+  ) %>%
+  filter(complications != "Aucune complication") %>%
+  group_by(id_unik) %>%
+  summarise(
+    total_complications_perID = n_distinct(complications),
+    .groups = "drop"
+  ) 
+
+# 6. Make the binary and ordinal variables
+merged_new_dataframe3 <- merged_new_dataframe %>% 
+  left_join(merged_new_dataframe2, by="id_unik") %>% 
+  mutate(
+    total_complications_perID=
+      ifelse(is.na(total_complications_perID),0,total_complications_perID),
+    # Binary
+    total_complications_bin_perID = 
+      ifelse(total_complications_perID == 0, "Non","Oui"),
+    # Ordinal
+    total_complications_cat_perID =
+      case_when(
+        total_complications_perID == 0 ~ "0",
+        total_complications_perID == 1 ~ "1",
+        total_complications_perID >= 2 ~ "2+"
+        ) %>% 
+      factor(levels= c("0","1","2+"), ordered = TRUE)
+    )
+
+# 7. Add new variables to the main dataframe 
+grossesse_mod2 <- grossesse_mod2 %>% 
+  left_join(merged_new_dataframe3  %>% 
+              dplyr::select(id_unik, total_complications_perID, 
+                            total_complications_bin_perID,
+                            total_complications_cat_perID), 
+            by="id_unik")
+
+# 9. remove temporary dataframes 
+rm(new_dataframe); rm(new_dataframe1);rm(merged_new_dataframe);rm(merged_new_dataframe2); rm(merged_new_dataframe3)
+
+#-------------------------------------------------
+#  Create individual complication type variable 
+#-------------------------------------------------
+# 1. Create a temporary dataframe to generate new variables related to obstetrical complications in wide format
+new_dataframe <-  grossesse_mod2 %>% 
+  distinct(id_unik, Complication_value_perPreg) %>% 
+  mutate(Complication_value_new=
+           case_when(
+             Complication_value_perPreg%in% c("Hémorragie post-partum") ~
+               "Hemorr_post_partum",
+             Complication_value_perPreg%in% c("Menace d'accouchement prématuré (ouverture du col, contractionsprématurées, rupture prématurée de la poche des eaux...") ~
+               "Menace_accouchement_premature",
+             Complication_value_perPreg%in% c("Diabète gestationnel") ~
+               "Diabete_gestationnel",
+             Complication_value_perPreg%in% c("Pré-éclampsie / Toxémie gravidique, HELLP Syndrome, Eclampsie") ~
+               "Preeclampsie_HELLEP",
+             Complication_value_perPreg%in% c("Hypertension liée à la grossesse") ~
+               "Hypertension_gross",
+             Complication_value_perPreg%in% c("Décollement du placenta") ~
+               "Decollement_placenta",
+             Complication_value_perPreg%in% c("Placenta praevia (localisation basse du placenta de l'utérus") ~
+               "Placenta_praevia",
+             Complication_value_perPreg%in% c("Vomissements sévères lors de la grossesse (Hypermérèse gravidique)") ~
+               "Vomissements_severes",
+             Complication_value_perPreg%in% c("Cholestase gravidique") ~
+               "Cholestase_gravidique",
+             Complication_value_perPreg%in% c("Rupture d'un kyste endométriosique en cours de grossesse") ~
+               "Rupture_kyste_endometriosique",
+             Complication_value_perPreg%in% c("Rupture utérine") ~
+               "Rupture_uterine",
+             Complication_value_perPreg%in% c("Autre") ~ 
+               "Autre",
+             Complication_value_perPreg%in% c("Aucune complication") ~
+               "Aucune_complication",
+             TRUE ~ NA_character_
+           )) %>% 
+  filter(!is.na(Complication_value_new)) %>% 
+  mutate(value=TRUE) %>% 
+  pivot_wider(
+    names_from = Complication_value_new,
+    values_from = value,
+    values_fill = list(value=FALSE),
+    names_prefix = "complic_"
+  ) 
+
+# 2. If at least one complication is TRUE, it will ultimately remain TRUE
+new_dataframe2 <- new_dataframe %>% 
+  group_by(id_unik) %>% 
+  summarise(across(starts_with("complic_"), ~ any(.))) %>% ungroup()
+
+# 3. Add new variables to the main dataframe 
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe2,by="id_unik") %>% 
+  dplyr::select(-c(Complication_1_2:Complication_6_2))
+
+# 4. Delete temporary dataframes 
+rm(new_dataframe);rm(new_dataframe2)
+
+#--------------------------------
+#      Complications per ID
+#--------------------------------
+new_dataframe <-  grossesse_mod2 %>%
+  distinct(id_unik, Complication_value_perPreg, total_complications_perID) %>% 
+  filter(!is.na(Complication_value_perPreg))
+
+#  Create a new categorical variable per patient
+complications_labels <- c(
+  "Hémorragie post-partum" = "Hemorr_post_partum",
+  "Menace d'accouchement prématuré (ouverture du col, contractionsprématurées, rupture prématurée de la poche des eaux..." =
+    "Menace_accouchement_premature",
+  "Diabète gestationnel" = "Diabete_gestationnel",
+  "Pré-éclampsie / Toxémie gravidique, HELLP Syndrome, Eclampsie" =
+    "Preeclampsie_HELLEP",
+  "Hypertension liée à la grossesse" = "Hypertension_gross",
+  "Décollement du placenta" = "Decollement_placenta",
+  "Placenta praevia (localisation basse du placenta de l'utérus" =
+    "Placenta_praevia",
+  "Vomissements sévères lors de la grossesse (Hypermérèse gravidique)"
+  = "Vomissements_severes",
+  "Cholestase gravidique" = "Cholestase_gravidique",
+  "Rupture d'un kyste endométriosique en cours de grossesse" =
+    "Rupture_kyste_endometriosique",
+  "Rupture utérine" = "Rupture_uterine",
+  "Autre" ="Autre",
+  "Aucune complication" = "Aucune_complication"
+)
+
+new_dataframe <- new_dataframe %>%
+  mutate(
+    Complications_cat_perID = case_when(
+      total_complications_perID == 0 & 
+        Complication_value_perPreg== "Aucune complication"~
+        "Aucune complication",
+      total_complications_perID >= 2 ~ 
+        "Multiple",
+      total_complications_perID == 1 ~
+        complications_labels[Complication_value_perPreg],
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!(Complication_value_perPreg == "Aucune complication" & 
+             total_complications_perID >= 1)) %>% distinct()
+
+# 2-6) Add all theses new variables to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe %>% distinct(id_unik, Complications_cat_perID),
+            by="id_unik")
+
+# 2-7) Delete temporary dataframes
+rm(new_dataframe); rm(new_dataframe1)
+
+#--------------------------------
+#     Complications per preg
+#--------------------------------
+# 1. Create a temporary dataframe
+new_dataframe <-  grossesse_mod2 %>%
+  distinct(IdPregnancy, Complication_value_perPreg, total_complications_perPreg) %>% 
+  filter(!is.na(Complication_value_perPreg))
+
+# # 2. Count the number of complications without 'Aucune complication'
+# new_dataframe1 <- new_dataframe %>%
+#   filter(Complication_value != "Aucune complication") %>%
+#   group_by(IdPregnancy, Complication_value) %>%
+#   summarise(n=n(), .groups = "drop") %>%
+#   group_by(IdPregnancy) %>%
+#   summarise(nb_complications_perPreg = sum(n))
+# 
+# # 3. Add count information
+# new_dataframe <- new_dataframe %>%
+#   left_join(new_dataframe1, by = "IdPregnancy") %>%
+#   mutate(across(where(is.numeric),  ~ replace_na(., 0)))
+
+# 4. Create a new variable
+new_dataframe <- new_dataframe %>%
+  mutate(
+    Complications_cat_perPreg = case_when(
+      total_complications_perPreg == 0 &
+        Complication_value_perPreg == "Aucune complication" ~
+        "Aucune complication",
+      total_complications_perPreg >= 2 ~
+        "Multiple",
+      total_complications_perPreg == 1 ~
+        complications_labels[Complication_value_perPreg],
+      TRUE ~ NA_character_
+    )
+  ) %>% 
+  distinct(IdPregnancy, Complications_cat_perPreg)
+
+# 5. Add this new variable to the main dataframe
+grossesse_mod2 <- grossesse_mod2 %>%
+  left_join(new_dataframe, by = "IdPregnancy")
+
+#---------------------------------------------------
+#  Regroup Obstetric Complications in 6 modalities  
+#---------------------------------------------------
+grossesse_mod2 <- grossesse_mod2 %>%
+  mutate(
+    Complications_cat_perID_grouped =
+     case_when(
+        Complications_cat_perID == "Aucune complication" ~
+          "No_complication",
+        Complications_cat_perID %in%
+          c(
+            "Diabete_gestationnel",
+            "Hypertension_gross",
+            "Preeclampsie_HELLEP",
+            "Cholestase_gravidique"
+          ) ~
+          "Metabolic_Hypertensive_single",
+        Complications_cat_perID %in%
+          c(
+            "Menace_accouchement_premature",
+            "Decollement_placenta",
+            "Placenta_praevia"
+          ) ~
+          "Preterm_related_single",
+        Complications_cat_perID == "Hemorr_post_partum" ~
+          "Hemorr_postpartum_single",
+        Complications_cat_perID %in%
+          c(
+            "Rupture_kyste_endometriosique",
+            "Vomissements_severes",
+            "Autre"
+          ) ~
+          "Other_single",
+        Complications_cat_perID == "Multiple" ~
+          "Multiple_complications",
+        TRUE ~ NA_character_
+      ) %>% 
+      as.factor()
+    
+      ) %>% 
+  group_by(IdPregnancy) %>% 
+  mutate(
+    Complications_cat_perPreg_grouped =
+      case_when(
+        Complications_cat_perPreg == "Aucune complication" ~
+          "No_complication",
+        Complications_cat_perPreg %in%
+          c(
+            "Diabete_gestationnel",
+            "Hypertension_gross",
+            "Preeclampsie_HELLEP",
+            "Cholestase_gravidique"
+          ) ~
+          "Metabolic_Hypertensive_single",
+        Complications_cat_perPreg %in%
+          c(
+            "Menace_accouchement_premature",
+            "Decollement_placenta",
+            "Placenta_praevia"
+          ) ~
+          "Preterm_related_single",
+        Complications_cat_perPreg == "Hemorr_post_partum" ~
+          "Hemorr_postpartum_single",
+        Complications_cat_perPreg %in%
+          c(
+            "Rupture_kyste_endometriosique",
+            "Vomissements_severes",
+            "Autre"
+          ) ~
+          "Other_single",
+        Complications_cat_perPreg == "Multiple" ~
+          "Multiple_complications",
+        TRUE ~ NA_character_
+      ) %>% 
+      as.factor()
+    ) %>% ungroup %>%  
+  group_by(id_unik, IdPregnancy) %>% 
+  filter(!(!is.na(Complication_value_perPreg) &
+           total_complications_perPreg==1&
+           is.na(Complications_cat_perPreg_grouped))) %>% 
+  ungroup()
+
+
+
+#------------------------------
+#  G/P : Gravidity and Parity  
+#------------------------------
+new_dataframe <- grossesse_mod2 %>%
+  arrange(id_unik, age_maternal) %>%
+  distinct(id_unik, IdPregnancy, age_maternal, live_birth_bin_all) %>%
+  group_by(id_unik) %>%
+  mutate(
+    gravida = row_number(),
+    para = lag(cumsum(live_birth_bin_all == "Oui"), default = 0)
+  ) %>%
+  ungroup()
+
+grossesse_mod2 <-  grossesse_mod2 %>% 
+  left_join(new_dataframe %>% distinct(IdPregnancy, gravida, para),
+            by="IdPregnancy")
+
+```
+
+# II. Final dataset
+
+```{r}
+#----------------------------------------------------------------
+#    FINAL Dataframe for the population without ongoing pregnancy 
+#-----------------------------------------------------------------
+# 1. Select necessary variables for the final dataset 
+sansgrossesseencours_final <-  grossesse_mod2 %>% 
+  dplyr::select(
+    id_unik,
+    IdPregnancy,
+    merged_DateDebut,
+    DateFin,
+    module,
+
+    # Live birth per pregnancy : Oui/Non
+    live_birth_bin_all, 
+    live_birth_bin_onlynew,
+
+    # Terme or incomplete per pregnancy
+    status_terme_all,
+    status_terme_onlynew,
+    #status_terme_onlyold,
+
+    # Type de terme et incomplete : fullterm, preterm, F-C, IVG, etc
+    type_preg_all,
+    type_preg_all_simple,
+    type_preg_onlynew,
+    type_preg_onlynew_simple,
+
+    # Live birth at least once per patient : Oui/Non
+    live_birth_bin_atleast_once_all,
+    live_birth_bin_atleast_once_onlynew,
+
+    # Number of Live births per patient
+    nb_live_births_all,
+    nb_live_births_onlynew,
+
+    # Number of incomplet pregnancies per patient
+    nb_incomplete_preg_pt_all,
+    nb_incomplete_preg_pt_onlynew,
+
+    # Number of grossesses enregistrées per patient
+    nb_total_gross,
+    nb_total_gross_NewModule,
+    nb_total_gross_OldModule,
+
+    # Maternal age at the end of pregnancy
+    age_maternal, # per pregnancy
+    first_preg_age,  # Per patient
+    last_preg_age_mod, # per patient
+    
+    amenorrhea_final,
+
+    # Conception method : Per patient and Per pregnancy
+    Methode_conception_bin_perID,
+    methode_conception_perID_cat,
+    methode_conception_perID_cat_simple,
+    
+    Methode_conception_bin_perPreg,
+    methode_conception_perPreg_cat,
+    methode_conception_perPreg_cat_simple,
+    methode_perID_IVF, 
+    methode_perID_IUI,
+    
+    # Mode of delivery and labor
+    Mode_accouchement, # per pregnancy
+    Mode_accouchement_perID, # per patient
+    VD_perID,
+    Csection_perID,
+    Travail_accouchement, # per pregnancy
+    Travail_accouchement_perID,  # per patient
+    labour_natural_perID,
+    labour_induced_perID,
+    
+    # Number of né vivants per patient
+    nb_nevivants_parpt,
+    PoidInf2, # per pregnancy
+    PoidSup2, # per pregnancy
+
+    # Number of breastfeeding per patient and Breasfeeding at least once
+    nb_allaitement, # per patient
+    allaitement_YN_atleast, # per patient
+    mois_allaitement, # per pregnancy
+    Allaitement2, # per pregnancy 
+
+    # Care taken or not per patient et per pregnancy
+    PriseenCharge_cat_perID,
+    PriseenCharge_cat_perPreg,
+    PriseenCharge_bin, # per patient
+    
+    # Obstetrical complications 
+    total_complications_perPreg:total_complications_bin_perPreg,
+    total_complications_perID:total_complications_cat_perID,
+    Complications_cat_perID:Complications_cat_perPreg_grouped,
+    complic_Aucune_complication:complic_Rupture_kyste_endometriosique,
+    
+    # G/P : Gravidity and Parity  
+    para,
+    gravida,
+
+    Date_naissance,
+    #DateCreation,
+    DateModification
+  ) %>% 
+  distinct() %>% 
+  mutate(age_new = 
+           as.character(round((DateModification - Date_naissance) /365, 1
+                              )) %>% as.numeric()
+         )
+```
+
+## > Add the new modalities
+
+```{r}
+# #----------------------------------------------------------
+# # Add the new cateogry : Not collected and Not relevant
+# #---------------------------------------------------------
+# sansgrossesseencours_final_test <- sansgrossesseencours_final %>%
+#   filter(module=="Nouveau") %>% 
+#   mutate(
+#     across(
+#       # If the participants never had a live birth, the mode of delivery, the induction and the obstetric complications were not registered
+#       c(Mode_accouchement,
+#         Travail_accouchement,
+#         total_complications_bin_perPreg, 
+#         total_complications_cat_perPreg),
+#                 ~ case_when(
+#                   status_terme_onlynew == "Incomplete" ~ "Only_incomplete_preg",
+#                   TRUE ~ as.character(.)
+#                 )),
+#     # # If the module is old, the data is not collected : Conception method, medical care, mode of delivery, induction, complication
+#     # across(
+#     #   c(starts_with(c("methode", "Prise", "mode", "travail", "complic")),
+#     #     total_complications_cat_perPreg,
+#     #     total_complications_bin_perPreg,
+#     #     
+#     #     -Methode_conception_bin_perID,
+#     #     -methode_conception_perID_cat,
+#     #     -methode_conception_perID_cat_simple,
+#     #     -PriseenCharge_cat_perID,
+#     #     -Travail_accouchement_perID 
+#     #   ),
+#     #   ~ case_when(
+#     #     module=="Ancien" ~ "Not_collected",
+#     #     TRUE~ as.character(.))),
+# 
+#     Travail_accouchement_perID_test=
+#       case_when(
+#         !is.na(Travail_accouchement_perID) ~
+#           Travail_accouchement_perID,
+#         is.na(Travail_accouchement_perID)& nb_total_gross==nb_incomplete_preg_pt_all ~
+#           "Not_applicable",
+#         is.na(Travail_accouchement_perID)& nb_total_gross>nb_incomplete_preg_pt_all ~
+#           "Not_collected",
+#         TRUE ~NA_character_),
+#     
+#     Mode_accouchement_perID_test=
+#       case_when(
+#         !is.na(Mode_accouchement_perID) ~
+#           Mode_accouchement_perID,
+#         is.na(Mode_accouchement_perID)& nb_total_gross==nb_incomplete_preg_pt_all ~
+#           "Not_applicable",
+#         is.na(Mode_accouchement_perID)&nb_total_gross>nb_incomplete_preg_pt_all ~
+#           "Not_collected",
+#         TRUE ~NA_character_
+#       ),
+#     total_complications_bin_perID_test =
+#       case_when(
+#         !is.na(total_complications_bin_perID) ~
+#           total_complications_bin_perID,
+#         is.na(total_complications_bin_perID) & nb_total_gross==nb_incomplete_preg_pt_all ~
+#           "Not_applicable",
+#         is.na(total_complications_bin_perID ) & nb_total_gross>nb_incomplete_preg_pt_all &
+#           !is.na(total_complications_bin_perPreg) ~
+#           "Not_collected",
+#         is.na(total_complications_bin_perID )&nb_total_gross>nb_incomplete_preg_pt_all &
+#           is.na(total_complications_bin_perPreg) ~
+#           NA_character_,
+#         TRUE ~NA_character_
+#       )
+#     )
+```
+
+
+# III. Save the final dataframe
+
+```{r}
+# update : 2025-06-16
+write.csv(sansgrossesseencours_final,"sansgrossesseencours_final.csv")
+```
+
+
+
+# DESCRIPTIONS 
+- les taux de grossesse, global et à terme, par femme seront calculés
+pour chaque type de méthode de conception (naturelle, médicament contre l’infertilité,insémination artificielle, FIV, chirurgie, autre) en divisant le nombre de grossesses obtenues avec chaque méthode par le nombre total de grossesses ou le nombre de grossesses à terme,respectivement ; 
+- des catégories « multiples » seront créées selon la distribution des différentes méthodes de conception 

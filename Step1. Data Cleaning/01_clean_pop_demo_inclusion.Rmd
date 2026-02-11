@@ -1,0 +1,355 @@
+---
+title: "01_clean_pop_demo_inclusion"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_pop_demo_inclusion
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import raw data : pop_demo_inclusion 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+# pop_demo_inclusion <- read.csv("~/Projet/0.Data/complication_pop_demo_inclusion_20250226.csv", fileEncoding = "latin1",colClasses = c(Sexe = "character"))
+pop_demo_inclusion <-
+  read.csv("Complic_donnees_demo_20250407.csv",
+           fileEncoding = "latin1",
+           # Sex 'F' is imported like False
+           colClasses = c(Sexe = "character"))
+
+#------------------------------------------------
+# Replace cells with nothing or spaces with NA
+#------------------------------------------------
+pop_demo_inclusion[pop_demo_inclusion == ""] <- NA
+pop_demo_inclusion[pop_demo_inclusion == " "] <- NA
+
+#------------------------------------------------------------
+# Replace non-standard apostrophes with standard ones in character variables
+#------------------------------------------------------------
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(across(where(is.character), ~ gsub("\u0092", "'", .)))
+```
+
+# I. Preprocessing Data
+```{r}
+#------------------------------------------
+# Categorial variable for age at inclusion
+#------------------------------------------
+#quantile(pop_demo_inclusion$age,probs = c(1/3,2/3),na.rm = TRUE)
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    age_cat = case_when(
+      age <= 30 ~ "<=30",
+      age > 30 & age <= 40 ~ "]30;40]",
+      age > 40 ~ ">40",
+      TRUE ~ NA_character_) %>% 
+      factor(levels=c("<=30","]30;40]",">40" ),
+             ordered = TRUE))
+#------------------------------------------ 
+# Recode level of study in 3 categories (<= Bac, Bac +2, >=Bac+3) 
+#------------------------------------------
+pop_demo_inclusion <- pop_demo_inclusion %>% 
+  mutate(
+    diplome_ini2 = 
+      case_when(
+        diplome_ini%in%c("Aucun diplôme","Baccalauréat ou diplôme équivalent",
+                         "Certificat d'aptitude professionnelle (CAP) ou Brevet d'études professionnelles (BEP)",
+                         "Certificat de formation générale (CFG), certificat d'étude primaire, diplôme national du brevet (BEPC ou Brevet des collèges)",
+                         "Autre diplôme") ~
+               "<=Baccalauréat/Aucun/Autre",
+        diplome_ini =="Diplôme de niveau Bac+2 (DUT, BTS, DEUG, écoles des formations sanitaires ou sociales...)" ~
+          "Bac+2",
+         diplome_ini == "Diplôme de second ou troisième cycle universitaire (licence, maîtrise, master, DEA, DESS, doctorat) ou diplômes de grandes écoles" ~
+          ">=Bac+3"
+           ) %>% 
+      factor(
+        levels= c("<=Baccalauréat/Aucun/Autre", "Bac+2", ">=Bac+3"),
+        ordered = TRUE)
+    )
+
+#---------------------------
+#    Employment status
+#---------------------------
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    situation_emploi_ini2 =
+      case_when(
+        situation_emploi_ini %in% c("Allocataire du RSA", "Chômeur(se) indemnisé(e) ou non") ~
+          "Sans Emploi",
+        situation_emploi_ini %in% c("Autre", "Retraité(e), pré-retraité(e)","Au foyer") ~
+          "Autre",
+        situation_emploi_ini == "En formation (lycéen(e), étudiant(e), stagiaire, apprenti(e))" ~
+          "Etudiant",
+        situation_emploi_ini == "En invalidité / en longue maladie" ~
+          "En invalidité / en longue maladie",
+        situation_emploi_ini == "Occupe un emploi" ~
+          "Employee",
+        TRUE ~ NA_character_
+      ) %>% as.factor()
+  )
+
+#-----------------
+# BMI in 4 levels
+#-----------------
+# Correct an outlier : 1.64-> 164cm
+pop_demo_inclusion$taille_ini[pop_demo_inclusion$taille_ini<10] <- 1.64*100
+# BMI in numeric and categories
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    IMC = poids_ini / ((taille_ini / 100) ^ 2),
+    IMC2 = cut(
+      IMC,
+      breaks = c(0, 18.5, 24.99, 29.99, Inf),
+      labels = c("Poids insuffisant", "Poids normal", "Surpoids", "Obésité"),
+      include.lowest = TRUE
+    ) %>% 
+      factor(levels=c("Poids insuffisant", "Poids normal", "Surpoids", "Obésité"), ordered = TRUE)
+  )
+
+
+```
+
+## > Information Géographique 
+- Complications de la grossesse : pas très intéressant 
+
+```{r}
+#-------------------------
+# CODE POSTAL_RESIDENCE 
+#-------------------------
+# Corse
+corse_villes_2A <- c("APPIETTO",
+                     "AJACCIO",
+                     "BONIFACIO",
+                     "AZILONE AMPAZA",
+                     "SOLLACARO",
+                     "COZZANO",
+                     "PROPRIANO",
+                     "ALATA"
+                     )
+corse_villes_2B <- c("MONTEGROSSO",
+                     "BIGUGLIA",
+                     "SAN NICOLAO",
+                     "TALASANI",
+                     "BASTIA",
+                     "Prunelle di fium’or")
+
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    CodePostal_residence = case_when(
+      Ville_residence %in% corse_villes_2A ~ "2A000",
+      Ville_residence %in% corse_villes_2B ~ "2B000",
+      TRUE ~ CodePostal_residence
+    )
+  )
+
+
+# Overseas
+outremer_codes <- c("971" = "9A000", "972" = "9B000", 
+                    "973" = "9C000", "974" = "9D000", 
+                    "976" = "9F000", "988" = "ROM00")
+
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    CodePostal_residence = if_else(
+      substr(CodePostal_residence, 1, 3) %in% names(outremer_codes),
+      outremer_codes[substr(CodePostal_residence, 1, 3)],
+      CodePostal_residence
+    )
+  )
+
+# Monaco
+pop_demo_inclusion$CodePostal_residence[pop_demo_inclusion$CodePostal_residence == "98000"] <- ""
+
+# France department
+pop_demo_inclusion$Dep <- ifelse(
+  pop_demo_inclusion$Pays_residence == "FRANCE",
+  substr(pop_demo_inclusion$CodePostal_residence, 1, 2),
+  NA
+)
+
+# Standardisation of municipality names
+pop_demo_inclusion$Commune_residence <- toupper(pop_demo_inclusion$Ville_residence)
+
+# Spell Check
+corrections <- c(
+  "CHEMILLE MELAY" = "CHEMILLE",
+  "LOMME" = "LILLE",
+  "ST SULPICE LA POINT" = "ST SULPICE",
+  "ERAGNY SUR OISE" = "ERAGNY",
+  "FRANCONVILLE LA GAR" = "FRANCONVILLE",
+  "Le château d’Oléron" = "LE CHATEAU-D'OLERON",
+  "PLOULEC H" = "PLOULEC'H",
+  "ST CAST LE GUILDO" = "SAINT-CAST-LE-GUILDO",
+  "LES AUXONS" = "AUXON-DESSUS",
+  "GAGNY" = "GASNY",
+  "Bleury" = "BLEURY-SAINT-SYMPHORIEN",
+  "Portsall" = "PLOUDALMEZEAU",
+  "Prunelle di fium’or" = "PRUNELLI-DI-FIUMORBO",
+  "Laudun"= "LAUDUN-L’ARDOISE",
+  "RAMONVILLE"= "RAMONVILLE-SAINT-AGNE",
+  "PORT STE FOY ET PON" ="SAINTE-FOY-LA-GRANDE",
+  "ST JUST CHALEYSSIN"="SAINT-JUST-CHALEYSSIN",
+  "LA BAULE"="LA BAULE-ESCOUBLAC",
+  "Montrevault sur Evr"= "MONTREVAULT",
+  "AMNEVILLE LES THERM"= " AMNEVILLE",
+  "HELLEMMES LILLE"= "LILLE",
+  "villeneuve d’ascq"="VILLENEUVE-D'ASCQ",
+  "MAULEON SOULE"="MAULEON-LICHARRE",
+  "angoustrine"="ANGOUSTRINE-VILLENEUVE-DES-ESCALDES",
+  "BENNWIHR MITTELWIHR"="BENNWIHR",
+  "Caluire"="CALUIRE-ET-CUIRE",
+  "BEAUJEU ET QUITTEUR"="BEAUJEU-SAINT-VALLIER-PIERREJUX-ET-QUITTEUR",
+  "Longefoy"="AIME",
+  "BIHOREL"="ROUEN",
+  "CELY EN BIERE"="CELY"
+)
+
+pop_demo_inclusion$Commune_residence <- 
+  ifelse(pop_demo_inclusion$Ville_residence %in% names(corrections),
+         corrections[pop_demo_inclusion$Ville_residence],
+         pop_demo_inclusion$Commune_residence)
+
+# Remplace  "St" & "Ste"
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(Commune_residence = Commune_residence %>%
+           str_replace_all("\\bST\\b", "SAINT") %>%   # "ST" seul devient "SAINT"
+           str_replace_all("\\bSTE\\b", "SAINTE") %>% # "STE" seul devient "SAINTE"
+           str_replace_all("-ST-", "-SAINT-") %>%     # "-ST-" devient "-SAINT-"
+           str_replace_all("-STE-", "-SAINTE-") %>%   # "-STE-" devient "-SAINTE-"
+           str_replace_all("\\bST-", "SAINT-") %>%    # "ST-" en début de mot devient "SAINT-"
+           str_replace_all("\\bSTE-", "SAINTE-") %>%  # "STE-" en début de mot devient "SAINTE-"
+           str_replace_all("-ST\\b", "-SAINT") %>%    # "-ST" en fin de mot devient "-SAINT"
+           str_replace_all("-STE\\b", "-SAINTE")      # "-STE" en fin de mot devient "-SAINTE"
+  )
+
+# Function to replace abbreviations with full names
+harmonize_commune <- function(commune) {
+  commune <- str_replace_all(commune, "-STE-", "-SAINTE-")
+  commune <- str_replace_all(commune, "ST ", "SAINT ")
+  commune <- str_replace_all(commune, "ST-", "SAINT-")
+  commune <- str_replace_all(commune, "STE ", "SAINTE ")
+  commune <- str_replace_all(commune, "STE-", "SAINTE-")
+  return(commune)
+}
+
+# Function to remove accents
+library(stringi)
+remove_accents <- function(commune) {
+  return(stri_trans_general(commune, "Latin-ASCII"))
+}
+
+# Function to correct apostrophes
+correct_apostrophes <- function(commune) {
+  commune <- str_replace_all(commune, "\\bD\\s+", "D'")  # Corrige " D " en "D'"
+  commune <- str_replace_all(commune, "\\bL\\s+", "L'")  # Corrige " L " en "L'"
+  return(commune)
+}
+
+# Function to correct hyphens
+correct_hyphens <- function(commune) {
+  commune <- if_else(
+    !str_sub(commune, 2, 2) %in% c("E", "A") & str_detect(commune, " "),
+    str_replace_all(commune, " ", "-"),
+    commune
+  )
+  commune <- if_else(
+    str_sub(commune, 2, 2) %in% c("E", "A") & str_detect(str_sub(commune, 4, 16), " "),
+    paste0(str_sub(commune, 1, 3), str_replace_all(str_sub(commune, 4, 16), " ", "-")),
+    commune
+  )
+  return(commune)
+}
+
+# Function to apply all transformations
+tidy_commune <- function(commune) {
+  commune <- harmonize_commune(commune)
+  commune <- remove_accents(commune)
+  commune <- correct_apostrophes(commune)
+  commune <- correct_hyphens(commune)
+  return(commune)
+}
+
+# Apply transformations
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    Commune_residence = case_when(
+      Ville_residence == "ST PRIEST" ~ "SAINT-PRIEST",
+      Ville_residence == "ST PRIEST EN JAREZ" ~ "SAINT-PRIEST-EN-JAREZ",
+      Pays_residence == "FRANCE" ~ tidy_commune(Commune_residence),
+      TRUE ~ Commune_residence  # Conserve la valeur originale si aucune condition ne s'applique
+      )
+    )
+
+# Appliquer la transformation des codes postaux et créer Code_Departement
+pop_demo_inclusion <- pop_demo_inclusion %>%
+  mutate(
+    CodePostal_residence = as.character(CodePostal_residence),  # S'assurer que c'est du texte
+    Code_Departement = ifelse(
+      substr(CodePostal_residence, 1, 3) %in% names(outremer_codes),
+      outremer_codes[substr(CodePostal_residence, 1, 3)],
+      substr(CodePostal_residence, 1, 2)  # Garde la valeur originale si non concerné
+    ),
+    ID_ville = paste0(Code_Departement, "_", Commune_residence)  # Ajout d'un séparateur pour éviter confusion
+  )
+
+# Delete unnecessary vectors 
+rm(corse_villes_2A, corse_villes_2B, outremer_codes, corrections)
+```
+
+# II. Final Dataset : final_pop_demo_inclusion
+- Sélection : Date_naissance, age, diplome, situation_emploi, IMC, Code_Departement 
+
+```{r}
+pop_demo_inclusion_final <- pop_demo_inclusion %>%
+  distinct(
+    id_unik,
+    age,
+    age_cat,
+    statut_marital_ini,
+    diplome_ini2,
+    situation_emploi_ini2,
+    IMC2,
+    Statut_tabac_ini,
+    freq_alcool_ini,   
+    nb_verre_ini,
+    Dep
+  )
+```
+
+# III. Save the final dataframe 
+
+```{r}
+# Download the final file : 
+#write.csv(pop_demo_inclusion_final,file="pop_demo_inclusion_final.csv")
+```
+

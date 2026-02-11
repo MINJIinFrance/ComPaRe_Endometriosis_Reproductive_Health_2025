@@ -1,0 +1,135 @@
+---
+title: "01_clean_PHQ9_GAD7"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_PHQ9_GAD7
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+ PHQ9 = Patient Health Questionnaire-9 (Depression)
+ GAD7 = Generalized Anxiety Disorder-7
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+PHQ9_GAD7 <- read.csv(
+  "Complic_pop_QST_0335_20250407_PHQ9_GAD7.csv",
+  encoding = "latin1",
+  colClasses = c(Sexe = "character")
+  )
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+PHQ9_GAD7 <- PHQ9_GAD7 %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- PHQ9_GAD7 %>% sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(PHQ9_GAD7)) %>% as.vector() # index of columns having only NA
+```
+
+# I. Preprocessing Data
+
+```{r}
+PHQ9_GAD7 <- PHQ9_GAD7%>%
+  mutate(across(starts_with("score_"),~as.numeric(.)))
+
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+PHQ9_GAD7 <- PHQ9_GAD7 %>% 
+  mutate(PHQ9_GAD7_participated=ifelse(is.na(IdAction),
+                                       "Non","Oui"))
+
+#----------------------------------
+# Score : numeric -> categorical
+#----------------------------------
+# 1. Create new categorical variables 
+PHQ9_GAD7 <- PHQ9_GAD7 %>% 
+  mutate(
+    score_GAD7_cat= 
+      case_when(
+        score_GAD7<5 ~ "Minimal",
+        score_GAD7>= 5 & score_GAD7< 10 ~ "Mild",
+        score_GAD7>= 10 & score_GAD7< 15 ~ "Moderate",
+        score_GAD7>= 15 & score_GAD7< 22 ~ "Severe",
+        TRUE~NA_character_
+          ) %>% 
+      factor(
+        levels=c("Minimal", "Mild","Moderate","Severe"),
+        ordered = TRUE),
+    
+    score_PHQ9_cat= 
+      case_when(
+        score_PHQ9<5 ~ "Minimal",
+        score_PHQ9>= 5 & score_PHQ9< 10 ~ "Mild",
+        score_PHQ9>= 10& score_PHQ9< 15 ~ "Moderate",
+        score_PHQ9>= 15& score_PHQ9< 20 ~ "Moderately severe",
+        score_PHQ9>= 20& score_PHQ9< 28 ~ "Severe",
+        TRUE~NA_character_
+        ) %>% 
+      factor(
+        levels=c("Minimal", "Mild","Moderate",
+                 "Moderately severe","Severe"), 
+        ordered = TRUE)
+  )
+```
+
+# II. Final dataset
+
+```{r}
+PHQ9_GAD7_final <- PHQ9_GAD7 %>% 
+  dplyr::select(id_unik,
+                IdAction,
+                score_GAD7_cat,
+                score_PHQ9_cat,
+                PHQ9_GAD7_participated
+                ) %>% 
+  distinct() %>% 
+  mutate(across(-c(id_unik, IdAction), ~
+                  case_when(
+                    is.na(IdAction) ~ "Not_answered",
+                    TRUE  ~ .
+                  ))) %>%
+  select(-IdAction)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(PHQ9_GAD7_final,"PHQ9_GAD7_final.csv")
+```
+

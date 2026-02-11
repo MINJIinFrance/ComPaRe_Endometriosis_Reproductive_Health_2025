@@ -1,0 +1,1816 @@
+---
+title: "03_O3_Data_EDA_PerPreg"
+author: "Minji NAM"
+date: "2025-05-19"
+output: html_document
+---
+
+*Name* : 03_O3_Data_EDA_PerPreg
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Obejctive 3, Data preparation and EDA for the participant population
+*Date of creation* : 2025-05-26
+*Date of update* : 2025-05-26
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(purrr) # reduce()
+library(stringr)
+library(messy)
+library(tableone)
+library(nnet)
+library(broom)
+library(gt)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+library(chromote)
+library(car)
+library(mediation)
+library(shiny)
+library(shinydashboard)
+library(data.table)
+library(DT)
+library(mice)
+library(dagitty)
+library(ggdag)
+library(corrplot)
+library(plotly)
+library(naniar)
+library(VIM)
+library(mice)
+library(finalfit)
+library(Hmisc)
+library(smdi)
+library(jomo)
+library(mitml)
+library(missForest)
+```
+
+# I. Dataset per Preg
+## 0. Import the dataset 
+
+n= 468
+
+```{r}
+# Stage_M2_Complic_Gross/
+df_final_complic_perPreg <- 
+  read.csv("df_final_complic_perPreg.csv", 
+           stringsAsFactors = TRUE) %>% 
+  dplyr::select(-X) %>% 
+  distinct()
+
+df_final_complic_perPreg %>% dim
+```
+
+## I. Data check and create new variables 
+
+```{r}
+#-----------------------------------------
+# Remove the modality of 'Not_answered' 
+#-----------------------------------------
+df_final_complic_perPreg_mod <-
+  df_final_complic_perPreg %>%
+  mutate(
+    across(
+      .cols = everything(),
+      .fns = ~ if (is.factor(.) || is.character(.)) {
+        if (!str_detect(cur_column(), "_participated$")) {
+          na_if(as.character(.), "Not_answered")
+        } else {
+          .
+        }
+      } else {
+        .
+      }
+    ),
+    across(
+      .cols = where(is.character),
+      .fns = as.factor
+    )
+  )
+
+#----------------------------------------------
+#  Types of NA : Structual/Real NA/ Observed
+#----------------------------------------------
+df_final_complic_perPreg_mod <- df_final_complic_perPreg_mod %>%
+  mutate(
+    outcome_missing_type = case_when(
+      is.na(Complications_cat_perPreg_grouped) &
+        live_birth_bin_all == "Non" ~ "Structural_NA",
+      is.na(Complications_cat_perPreg_grouped) &
+        live_birth_bin_all == "Oui" ~ "Real_NA",
+      TRUE ~ "observed"
+    )
+  )
+
+# 
+df_final_complic_perPreg_mod$outcome_missing_type %>% table(useNA = "a") %>% addmargins()
+
+#----------------------------------------------------
+#      Only observed without missing data of outcome 
+#----------------------------------------------------
+# n= 369 pregnancies having only 
+df_final_complic_perPreg_mod2 <- df_final_complic_perPreg_mod %>%
+  filter(outcome_missing_type == "observed") %>% 
+  mutate(across(c(gravida, para), ~ as.factor(.)))
+```
+
+## II. EDA 
+**1. Data strucutre**
+install.packages("prettyR")
+library(prettyR)
+describe(data)
+
+**2. Data type**
+- sapply(data, class)
+
+**3. Check basic statistics and distribution**
+- Summary of numeric data
+- Count and proportion
+- Histogram
+- Boxplot
+
+**4. Correlation analysis**
+- Correlation Matrix and Visualisation
+
+### 1) gtsummary
+-  2 groups : Complication Yes/No per participant
+
+```{r}
+library(gtsummary)
+
+df_final_complic_perPreg_mod2 %>%
+  dplyr::select(-id_unik, -IdPregnancy) %>% 
+  tbl_summary(
+    by = Complications_cat_perPreg_grouped,
+    statistic = list(all_continuous() ~ "{mean} ({sd})",  
+                     all_categorical() ~ "{n} ({p}%)"),    
+    missing = "ifany" 
+  ) %>%
+  # add_n() %>%                
+  # add_p() %>%               
+  bold_labels()    
+```
+
+### 2) R Shiny  : Distribution (Numeric, Categoric), Correlatoin, NA values
+- R Shiny App for Data Distribution Visualization
+
+#### * UI
+```{r}
+#--------
+#   UI
+#--------
+ui <- dashboardPage(
+  dashboardHeader(title = "O3 : Data Distribution Viewer"),
+  dashboardSidebar(sidebarMenu(
+    menuItem(
+      "Numeric Variables",
+      tabName = "numeric",
+      icon = icon("chart-line")
+    ),
+    menuItem(
+      "Categorical Variables",
+      tabName = "categorical",
+      icon = icon("bar-chart")
+    ),
+    menuItem(
+      "Missing Values Analysis",
+      tabName = "missing",
+      icon = icon("table")
+    ),
+    # New Menu Item for Correlation
+    menuItem(
+      "Variable Correlation",
+      tabName = "correlation",
+      icon = icon("link")
+    ),
+    menuItem(
+      "Data Table",
+      tabName = "datatable",
+      icon = icon("table"))
+  )),
+  dashboardBody(tabItems(
+    #-----------------------
+    # Numeric variables tab
+    #-----------------------
+    tabItem(tabName = "numeric", fluidRow(
+      box(
+        title = "Select Numeric Variable",
+        status = "primary",
+        solidHeader = TRUE,
+        selectInput("numericVar", "Choose variable:",
+                    choices = NULL)
+      ),
+      box(
+        title = "Summary Statistics",
+        status = "primary",
+        solidHeader = TRUE,
+        verbatimTextOutput("numericSummary")
+      )
+    ), fluidRow(
+      box(
+        title = "Box Plot",
+        status = "primary",
+        solidHeader = TRUE,
+        plotOutput("boxPlot")
+      ),
+      box(
+        title = "Histogram",
+        status = "primary",
+        solidHeader = TRUE,
+        plotOutput("histPlot")
+      )
+    )),
+    #----------------------------
+    # Categorical variables tab
+    #----------------------------
+    tabItem(tabName = "categorical", fluidRow(
+      box(
+        title = "Select Categorical Variable",
+        status = "success",
+        solidHeader = TRUE,
+        selectInput("categoricalVar", "Choose variable:",
+                    choices = NULL)
+      ),
+      box(
+        title = "Bar Plot",
+        status = "success",
+        solidHeader = TRUE,
+        plotOutput("barPlot")
+      )
+    ), fluidRow(
+      box(
+        title = "Frequency Table",
+        status = "success",
+        solidHeader = TRUE,
+        width = 12,
+        dataTableOutput("freqTable")
+      )
+    )),
+    #-------------
+    # NA analysis
+    #-------------
+    tabItem(tabName = "missing", fluidRow(
+      box(
+        title = "Missing Values Summary",
+        status = "warning",
+        solidHeader = TRUE,
+        width = 12,
+        dataTableOutput("missingTable")
+      )
+    ), fluidRow(
+      box(
+        title = "Missing Values Visualization",
+        status = "warning",
+        solidHeader = TRUE,
+        width = 12,
+        plotOutput("missingPlot", height = "600px")
+      )
+    )),
+    #-------------------------
+    # Correlation analysis tab
+    #-------------------------
+    tabItem(tabName = "correlation",
+            fluidRow(
+              box(
+                title = "Select Analysis Type",
+                status = "info",
+                solidHeader = TRUE,
+                width = 12,
+                selectInput("correlationType", "Choose Analysis:",
+                            choices = c("Numeric vs Numeric",
+                                        "Categorical vs Categorical",
+                                        "Numeric vs Categorical"))
+              )
+            ),
+            # Conditional UI based on analysis type
+            uiOutput("correlationUI")
+    ),
+    #----------------
+    # Data table tab
+    #----------------
+    tabItem(
+      tabName = "datatable",
+      box(
+        title = "Data Table",
+        status = "warning",
+        solidHeader = TRUE,
+        width = 12,
+        dataTableOutput("fullDataTable")
+      )
+    )
+  ))
+)
+```
+
+#### * Server
+
+```{r}
+#-------------------
+# Define the data 
+#-------------------
+data <- df_final_complic_perPreg_mod2
+
+#---------
+# Server
+#---------
+# Change the dataset
+server <- function(input, output, session) {
+
+  # Reactive values to store column names
+  col_types <- reactiveValues(numeric = NULL, categorical = NULL)
+
+  #------------------------------------------
+  # Identify numeric and categorical columns
+  #------------------------------------------
+  observe({
+    req(data) # Ensure data is loaded
+
+    is_numeric_col <- sapply(data,
+                             function(x) is.numeric(x) && !is.factor(x))
+
+    col_types$numeric <- names(data)[is_numeric_col]
+    col_types$categorical <- names(data)[!is_numeric_col]
+
+    # Update select inputs for existing tabs
+    updateSelectInput(session, "numericVar",
+                      choices = col_types$numeric)
+    updateSelectInput(session, "categoricalVar",
+                      choices = col_types$categorical)
+  })
+
+  #-------------------------------------
+  # Original Tab Outputs (Existing code)
+  #-------------------------------------
+
+  # Histogram for numeric variables
+  output$histPlot <- renderPlot({
+    req(input$numericVar, data)
+    ggplot(data, aes_string(x = input$numericVar)) +
+      geom_histogram(fill = "steelblue", color = "white", bins = 30) +
+      labs(title = paste("Distribution of", input$numericVar),
+           x = input$numericVar, y = "Frequency") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+  # Box plot for numeric variables
+  output$boxPlot <- renderPlot({
+    req(input$numericVar, data)
+    ggplot(data, aes_string(y = input$numericVar)) +
+      geom_boxplot(fill = "steelblue") +
+      labs(title = paste("Box Plot of", input$numericVar),
+           x = "", y = input$numericVar) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+  # Summary statistics for numeric variables
+  output$numericSummary <- renderPrint({
+    req(input$numericVar, data)
+    summary(data[[input$numericVar]])
+  })
+
+  # Bar plot for categorical variables
+  output$barPlot <- renderPlot({
+    req(input$categoricalVar, data)
+    var_sym <- sym(input$categoricalVar)
+
+    freq_data <- data %>%
+      filter(!is.na(!!var_sym)) %>% # Exclude NA for counting
+      count(!!var_sym) %>%
+      arrange(desc(n))
+
+    # Limit to top 20 + "Others"
+    if (nrow(freq_data) > 20) {
+        top_20 <- freq_data[1:20, ]
+        others_n <- sum(freq_data[21:nrow(freq_data), ]$n)
+        # Ensure correct structure for rbind
+        others_row <- tibble(!!var_sym := factor("Others", levels=c(levels(top_20[[1]]),"Others")), n = others_n)
+        freq_data <- rbind(top_20, others_row)
+        freq_data[[1]] <- factor(freq_data[[1]], levels = c(as.character(top_20[[1]]), "Others")) # Set factor levels for plotting order
+         freq_data$n <- as.numeric(freq_data$n)
+    } else {
+       freq_data[[1]] <- factor(freq_data[[1]], levels = as.character(freq_data[[1]])) # Ensure factor for consistent plotting
+    }
+
+
+    ggplot(freq_data, aes(x = !!var_sym, y = n)) + # Use original factor levels for order
+      geom_bar(stat = "identity", fill = "darkgreen") +
+      labs(
+        title = paste("Distribution of", input$categoricalVar),
+        x = input$categoricalVar,
+        y = "Count"
+      ) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+
+  # Frequency table for categorical variables
+  output$freqTable <- renderDataTable({
+    req(input$categoricalVar, data)
+    data %>%
+      count(!!sym(input$categoricalVar)) %>%
+      mutate(Percentage = round(n / sum(n) * 100, 2)) %>%
+      arrange(desc(n)) %>%
+      rename(Category = 1, Count = n) %>%
+      datatable(options = list(pageLength = 10))
+  })
+
+  # NA analysis table
+  output$missingTable <- renderDataTable({
+    req(data)
+    na_summary <- data.frame(
+      Variable = names(data),
+      Type = sapply(data, function(x) ifelse(is.numeric(x) && !is.factor(x), "Numeric", "Categorical")),
+      Missing_Count = sapply(data, function(x) sum(is.na(x))),
+      Missing_Percent = sapply(data, function(x) round(sum(is.na(x)) / length(x) * 100, 2))
+    )
+    na_summary <- na_summary[order(-na_summary$Missing_Count), ]
+    datatable(na_summary, options = list(pageLength = 20), rownames = FALSE)
+  })
+
+  # NA value visualisation
+  output$missingPlot <- renderPlot({
+    req(data)
+    na_summary <- data.frame(
+      Variable = names(data),
+      Missing_Percent =
+        sapply(data,
+               function(x) sum(is.na(x)) / length(x) * 100)
+    ) %>% filter(Missing_Percent > 0) # Only show vars with missing values
+
+    if(nrow(na_summary) == 0) return(NULL) # Don't plot if no missing values
+
+    na_summary <- na_summary[order(-na_summary$Missing_Percent), ]
+
+    if(nrow(na_summary) > 30) {
+      na_summary <- na_summary[1:30, ]
+    }
+
+    na_summary$color <- cut(
+      na_summary$Missing_Percent,
+      breaks = c(-1, 0.00001, 10, 30, 50, 101), # Adjusted breaks for >0
+      labels = c("darkgreen", "green", "orange", "red", "darkred"),
+      right = FALSE
+    )
+
+    ggplot(na_summary, aes(
+      x = reorder(Variable, Missing_Percent),
+      y = Missing_Percent,
+      fill = color
+    )) +
+      geom_bar(stat = "identity") +
+      geom_text(aes(label=sprintf("%.1f%%", Missing_Percent)), hjust=-0.1, size=3.5) + # Add percentage labels
+      scale_fill_identity() +
+      coord_flip() + # Flip coordinates for better readability
+      labs(title = "Missing Values by Variable (Top 30 with Missing Data)",
+           x = "Variable", y = "Missing Values (%)") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  }, height = 600) # Adjust height dynamically maybe?
+
+
+  # Full data table
+  output$fullDataTable <- renderDataTable({
+    req(data)
+    datatable(data, options = list(
+      pageLength = 10,
+      scrollX = TRUE
+    ))
+  })
+
+  #-------------------------------
+  # Correlation Tab Server Logic
+  #-------------------------------
+  # Dynamic UI for correlation analysis based on type selection
+  output$correlationUI <- renderUI({
+    req(input$correlationType, col_types$numeric, col_types$categorical)
+
+    if (input$correlationType == "Numeric vs Numeric") {
+      tagList(
+        fluidRow(
+          box(
+            title = "Select Variables", status = "info", solidHeader = TRUE, width = 6,
+            selectInput("numVar1", "Numeric Variable 1:", choices = col_types$numeric),
+            selectInput("numVar2", "Numeric Variable 2:", choices = col_types$numeric, selected = if(length(col_types$numeric)>1) col_types$numeric[2] else NULL)
+          ),
+          box(
+            title = "Correlation Coefficient", status = "info", solidHeader = TRUE, width = 6,
+            verbatimTextOutput("numNumCorr")
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Scatter Plot", status = "info", solidHeader = TRUE, width = 12,
+            plotOutput("numNumPlot")
+          )
+        )
+      )
+    } else if (input$correlationType == "Categorical vs Categorical") {
+      tagList(
+          fluidRow(
+            box(
+                title = "Select Variables", status = "info", solidHeader = TRUE, width = 12,
+                selectInput("catVar1", "Categorical Variable 1:", choices = col_types$categorical),
+                selectInput("catVar2", "Categorical Variable 2:", choices = col_types$categorical, selected = if(length(col_types$categorical)>1) col_types$categorical[2] else NULL)
+            )
+         ),
+        fluidRow(
+          box(
+            title = "Contingency Table", status = "info", solidHeader = TRUE, width = 6,
+             DT::dataTableOutput("catCatTable") # Use DT for consistency
+          ),
+          box(
+            title = "Chi-Squared Test", status = "info", solidHeader = TRUE, width = 6,
+            verbatimTextOutput("catCatTest")
+          )
+        ),
+         fluidRow(
+            box(
+                title = "Association Plot", status = "info", solidHeader = TRUE, width = 12,
+                plotOutput("catCatPlot")
+            )
+         )
+      )
+    } else if (input$correlationType == "Numeric vs Categorical") {
+      tagList(
+        fluidRow(
+            box(
+                title = "Select Variables", status = "info", solidHeader = TRUE, width = 12,
+                selectInput("numVarCorr", "Numeric Variable:", choices = col_types$numeric),
+                selectInput("catVarCorr", "Categorical Variable:", choices = col_types$categorical)
+            )
+        ),
+        fluidRow(
+          box(
+            title = "Grouped Box Plot", status = "info", solidHeader = TRUE, width = 6,
+            plotOutput("numCatPlot")
+          ),
+          box(
+            title = "ANOVA Summary", status = "info", solidHeader = TRUE, width = 6,
+            verbatimTextOutput("numCatTest")
+          )
+        )
+      )
+    }
+  })
+
+  # --- Numeric vs Numeric ---
+  output$numNumPlot <- renderPlot({
+    req(input$numVar1, input$numVar2, data)
+    # Ensure different variables are selected
+    if (input$numVar1 == input$numVar2) {
+        plot(0, type='n', axes=FALSE, ann=FALSE)
+        text(1, 0, "Please select two different numeric variables.", cex = 1.2)
+        return()
+    }
+
+    ggplot(data, aes_string(x = input$numVar1, y = input$numVar2)) +
+      geom_point(alpha = 0.6) +
+      geom_smooth(method = "lm", se = FALSE, color = "red") + # Add linear regression line
+      labs(title = paste("Scatter Plot:", input$numVar1, "vs", input$numVar2),
+           x = input$numVar1, y = input$numVar2) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+  output$numNumCorr <- renderPrint({
+      req(input$numVar1, input$numVar2, data)
+      # Ensure different variables are selected
+      if (input$numVar1 == input$numVar2) {
+          cat("Please select two different numeric variables.")
+          return()
+      }
+
+      # Calculate Pearson correlation, handling potential NAs
+      cor_test_result <- tryCatch({
+          # Ensure we use pairwise complete observations for robustness
+          cor.test(data[[input$numVar1]], data[[input$numVar2]], method = "pearson", use = "pairwise.complete.obs")
+      }, error = function(e) {
+          # Return a structure indicating error
+          list(estimate = NA, p.value = NA, error_message = conditionMessage(e))
+      })
+
+      cat("Pearson Correlation Analysis\n")
+      cat("----------------------------\n")
+      cat("Variable 1:", input$numVar1, "\n")
+      cat("Variable 2:", input$numVar2, "\n\n")
+
+      # Check for errors during calculation
+      if (!is.null(cor_test_result$error_message)) {
+          cat("Error calculating correlation:", cor_test_result$error_message, "\n")
+          cat("Note: Correlation could not be computed (check for NAs or lack of variance).\n")
+      } else if (is.na(cor_test_result$estimate) || is.na(cor_test_result$p.value)) {
+          cat("Correlation Coefficient (r): NA\n")
+          cat("P-value: NA\n")
+          cat("Note: Correlation could not be computed (likely due to extensive NA values or lack of variance).\n")
+      } else {
+          r_value <- cor_test_result$estimate
+          p_value <- cor_test_result$p.value
+          abs_r <- abs(r_value)
+
+          # Determine correlation strength
+          strength <- cut(abs_r,
+                          breaks = c(-0.01, 0.10, 0.30, 0.50, 0.70, 1.00), 
+                          labels = c("Very weak / none", "Weak", "Moderate", "Strong", "Very strong"),
+                          right = TRUE) # Intervals are (lower, upper]
+
+          cat("Correlation Coefficient (r):", round(r_value, 3), "\n")
+          cat("Strength of Correlation:", as.character(strength), "\n") # Display strength
+          cat("P-value:", format.pval(p_value, digits = 3, eps = 0.001), "\n")
+
+          # Interpret significance
+          if (p_value < 0.05) {
+              cat("Significance: Statistically significant correlation (p < 0.05)\n")
+          } else {
+              cat("Significance: No statistically significant correlation (p >= 0.05)\n")
+          }
+      }
+  })
+
+  # --- Categorical vs Categorical ---
+   cat_cat_data <- reactive({
+       req(input$catVar1, input$catVar2, data)
+       # Ensure different variables are selected
+       if (input$catVar1 == input$catVar2) return(NULL)
+
+       # Create contingency table, handling NAs by default (table removes them)
+        cont_table <- table(data[[input$catVar1]], data[[input$catVar2]])
+
+       # Check if table has dimensions before proceeding
+        if (nrow(cont_table) < 2 || ncol(cont_table) < 2) {
+            return(list(table = NULL, test = NULL, plot_data = NULL, message="Requires at least 2 levels in each variable after removing NA"))
+        }
+
+        # Perform Chi-squared test
+        chi_test <- tryCatch({
+            chisq.test(cont_table)
+        }, warning = function(w) {
+            # Capture warning (e.g., expected frequencies < 5)
+            list(test = chisq.test(cont_table, simulate.p.value = TRUE), # Try simulation if needed
+                 warning_message = paste("Chi-squared test warning:", conditionMessage(w)))
+        }, error = function(e) {
+            list(test = NULL, error_message = paste("Chi-squared test error:", conditionMessage(e)))
+        })
+
+        # Prepare data for ggplot (stacked bar chart)
+        plot_df <- as.data.frame(cont_table)
+        names(plot_df) <- c("Var1", "Var2", "Freq")
+
+
+       list(table = cont_table, test_result = chi_test, plot_data = plot_df, message=NULL)
+   })
+
+
+  output$catCatTable <- DT::renderDataTable({
+      result <- cat_cat_data()
+      req(result)
+      if(!is.null(result$message)){
+           # Display message instead of table if invalid
+           return(datatable(data.frame(Message = result$message)))
+      }
+      req(result$table)
+      # Convert table to data frame for DT
+      df_table <- as.data.frame.matrix(result$table)
+      # Add row names as a column
+      df_table <- cbind(Category1 = rownames(df_table), df_table)
+      rownames(df_table) <- NULL # Remove row names for cleaner look
+
+      datatable(df_table, options = list(pageLength = 5, scrollX = TRUE), caption = paste("Contingency Table:", input$catVar1, "vs", input$catVar2))
+  })
+
+  output$catCatTest <- renderPrint({
+      result <- cat_cat_data()
+      req(result)
+
+      if(!is.null(result$message)){
+          cat(result$message)
+          return()
+      }
+
+      if (input$catVar1 == input$catVar2) {
+        cat("Please select two different categorical variables.")
+        return()
+      }
+
+      req(result$test_result)
+
+      cat("Chi-Squared Test of Independence\n")
+      cat("--------------------------------\n")
+      cat("Variable 1:", input$catVar1, "\n")
+      cat("Variable 2:", input$catVar2, "\n\n")
+
+      if (!is.null(result$test_result$error_message)) {
+          cat(result$test_result$error_message, "\n")
+      } else {
+           test_output <- result$test_result$test %||% result$test_result # Handle potential list structure from warning
+           print(test_output)
+           if (!is.null(result$test_result$warning_message)) {
+                cat("\nWarning:", result$test_result$warning_message, "\n")
+                if(grepl("simulate.p.value", result$test_result$warning_message)){
+                     cat("P-value was simulated due to low expected frequencies.\n")
+                }
+           }
+           if (test_output$p.value < 0.05) {
+             cat("\nResult: Significant association (p < 0.05)\n")
+           } else {
+             cat("\nResult: No significant association (p >= 0.05)\n")
+           }
+      }
+      # Helper function to handle NULL
+      `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+
+  })
+
+   output$catCatPlot <- renderPlot({
+        result <- cat_cat_data()
+        req(result)
+
+        if (input$catVar1 == input$catVar2) {
+            plot(0, type='n', axes=FALSE, ann=FALSE)
+            text(1, 0, "Please select two different categorical variables.", cex = 1.2)
+            return()
+        }
+
+        if(!is.null(result$message)){
+            plot(0, type='n', axes=FALSE, ann=FALSE)
+            text(1, 0, result$message, cex = 1.2)
+           return()
+       }
+
+        req(result$plot_data)
+        df_plot <- result$plot_data
+
+       # Use ggplot for a stacked bar chart or heatmap
+        ggplot(df_plot, aes(x = Var1, y = Freq, fill = Var2)) +
+            geom_bar(stat = "identity", position = "fill") + # position="fill" shows proportions
+            scale_y_continuous(labels = scales::percent_format()) +
+            labs(title = paste("Proportional Stacked Bar Chart:", input$catVar1, "vs", input$catVar2),
+                 x = input$catVar1,
+                 y = "Proportion",
+                 fill = input$catVar2) +
+            theme_minimal() +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                  plot.title = element_text(hjust = 0.5))
+
+   })
+
+
+  # --- Numeric vs Categorical ---
+   num_cat_data <- reactive({
+        req(input$numVarCorr, input$catVarCorr, data)
+
+        num_var <- input$numVarCorr
+        cat_var <- input$catVarCorr
+
+        # Check number of levels in categorical variable after removing NAs for both vars
+        valid_data <- data %>%
+            filter(!is.na(.data[[num_var]]) & !is.na(.data[[cat_var]]))
+        
+        n_levels <- length(unique(valid_data[[cat_var]]))
+
+        if (n_levels < 2) {
+            return(list(plot_data=NULL, test=NULL, message="Categorical variable must have at least 2 levels with non-NA numeric data."))
+        }
+
+        # Perform ANOVA
+        formula_str <- paste("`",num_var, "` ~ `", cat_var,"`", sep="") #Use backticks for non-standard names
+        anova_test <- tryCatch({
+            summary(aov(as.formula(formula_str), data = data))
+        }, error = function(e) {
+            list(error_message = paste("ANOVA error:", conditionMessage(e)))
+        })
+
+        list(plot_data = valid_data, test_result = anova_test, message=NULL)
+   })
+
+
+  output$numCatPlot <- renderPlot({
+      result <- num_cat_data()
+       req(result)
+
+      if(!is.null(result$message)){
+           plot(0, type='n', axes=FALSE, ann=FALSE)
+           text(1, 0, result$message, cex = 1.2)
+           return()
+       }
+       req(result$plot_data)
+       df_plot <- result$plot_data
+       num_var <- input$numVarCorr
+       cat_var <- input$catVarCorr
+
+       ggplot(df_plot, aes_string(x = cat_var, y = num_var, fill = cat_var)) +
+         geom_boxplot(show.legend = FALSE) + # Fill by category for distinction
+         labs(title = paste("Box Plot:", num_var, "by", cat_var),
+              x = cat_var, y = num_var) +
+         theme_minimal() +
+         theme(axis.text.x = element_text(angle = 45, hjust = 1),
+               plot.title = element_text(hjust = 0.5))
+  })
+
+  output$numCatTest <- renderPrint({
+      result <- num_cat_data()
+      req(result)
+
+       if(!is.null(result$message)){
+           cat(result$message)
+           return()
+       }
+      req(result$test_result)
+
+
+      cat("ANOVA (Analysis of Variance)\n")
+      cat("----------------------------\n")
+      cat("Dependent Variable (Numeric):", input$numVarCorr, "\n")
+      cat("Independent Variable (Categorical):", input$catVarCorr, "\n\n")
+
+      if (!is.null(result$test_result$error_message)) {
+          cat(result$test_result$error_message, "\n")
+      } else {
+          anova_summary <- result$test_result
+          print(anova_summary)
+
+          # Extract p-value
+          p_value <- tryCatch(anova_summary[[1]]$`Pr(>F)`[1], error = function(e) NA)
+
+          if (is.na(p_value)) {
+              cat("\nCould not extract p-value from ANOVA summary.\n")
+          } else if (p_value < 0.05) {
+            cat("\nResult: Significant difference in means across groups (p < 0.05)\n")
+          } else {
+            cat("\nResult: No significant difference in means across groups (p >= 0.05)\n")
+          }
+          cat("\nNote: ANOVA assumes normality of residuals and homogeneity of variances.\n")
+          cat("Consider checking assumptions or using non-parametric alternatives (e.g., Kruskal-Wallis) if assumptions are violated.\n")
+      }
+  })
+
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+```
+
+### 3) Correlation between all numeric data
+- Removing correlated variables
+
+##### * Numeric data 
+- Cor : 0.2991123 between age and maternal age 
+
+```{r}
+#-------------------------
+#   0. Define the data 
+#-------------------------
+data <- df_final_complic_perPreg_mod2
+
+#--------------------------------
+#  1.  Identify numeric columns
+#--------------------------------
+is_numeric_col <- sapply(data,
+                         function(x) is.numeric(x) &&
+                           !is.factor(x))
+numeric_columns <- names(data)[is_numeric_col]
+
+#-----------------------------------
+#  2. Correlation test and matrix
+#------------------------------------
+# Pearson's product-moment correlation : 0.39 (p-value<0.05)
+cor.test(data[, numeric_columns]$age,data[, numeric_columns]$age_maternal)
+
+cor_matrix <- cor(data[, numeric_columns], 
+                  use="complete.obs")
+
+#--------------------
+# 3. Visualisation
+#--------------------
+library(corrplot)
+corrplot(cor_matrix, method="circle")
+```
+
+#### => The result of the correlation test is not really high between age and age_maternal. So I keep these two numeric variables. In addition, it represents the strong correlation between para and gravida variables, but there is a causal effect from para to gravida. So I'll look into DAG for the adjustements 
+
+
+### 3) Outlier 
+
+- Already done in preprocessing data
+- In the final dataframe, all numeric data don't have any outliers to treat
+
+### 4) Treatment of Missing Data
+
+- Check missing data : library(naniar);library(VIM);library(visdat); library(smdi)
+- smdi_rf (MNAR, MCAR, MAR) -> visualisation (md.pattern) -> Imputation (mice or MissForest) -> Analysis modeling -> pooling 
+
+#### - Missing Data Check
+##### - Proportion and visualization
+
+```{r}
+#-----------------------
+#  Define the data 
+#-----------------------
+data <- df_final_complic_perPreg_mod2 %>% 
+  dplyr::select(-IdPregnancy)
+
+#---------------------------------------------
+# lists of random and fixed effects variables
+#---------------------------------------------
+all_vars <- colnames(data)
+random_effects <- c(
+  "age_maternal",
+  "live_birth_bin_all",
+  "type_preg_all_simple",
+  "gravida",
+  "para",
+  "PoidInf2",
+  "PoidSup2",
+  "methode_conception_perPreg_cat_simple_mod",
+  "conception_PMA_perPreg",
+  "Mode_accouchement",
+  "Travail_accouchement",
+  "PriseenCharge_bin",
+  "PriseenCharge_cat_perPreg",
+  "Allaitement2"
+)
+
+fixed_effects <- setdiff(all_vars, random_effects)
+fixed_effects <-  setdiff(fixed_effects,c("total_complications_bin_perPreg","total_complications_cat_perPreg", "Complications_cat_perPreg_grouped"))
+
+#-------------------------------------------------------------------
+# Missing data proportion data per random, fixed effects variables
+#--------------------------------------------------------------------
+# 1. Random Effects variables' NA 
+miss_random <- data %>%
+  summarise(across(all_of(random_effects), ~mean(is.na(.))*100)) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "percent") %>%
+  mutate(percent = round(percent, 1),
+         group = "random")
+
+# 2. Fixed Effects variabes NA  (group_by(id_unik))
+data_fixed_idunik <- data %>%
+  select(id_unik, all_of(fixed_effects)) %>%
+  distinct(id_unik, .keep_all = TRUE)
+
+miss_fixed <- data_fixed_idunik %>%
+  summarise(across(all_of(fixed_effects), ~mean(is.na(.))*100)) %>%
+  pivot_longer(everything(), 
+               names_to = "variable", 
+               values_to = "percent") %>%
+  mutate(percent = round(percent, 1),
+         group = "fixed")
+
+# 3. Merge
+miss_all_summary <- bind_rows(miss_fixed, miss_random) %>%
+  arrange(desc(percent))
+miss_all_summary 
+
+#--------------------------------------------
+#   Summary of missing data : repeated obs
+#--------------------------------------------
+miss_summary <- tibble(
+  variable = names(data),
+  count = colSums(is.na(data)),
+  percent = round(colMeans(is.na(data)) * 100,1)
+  ) %>%
+  arrange(desc(percent)) ; miss_summary
+
+
+#################################
+#         Visualisation
+#################################
+# miss_all_summary or miss_summary 
+#--------------------------------
+#   Interactive plot : Plotly
+#--------------------------------
+summary_NA <- miss_all_summary # miss_summary
+
+library(plotly)
+plot_ly(summary_NA %>% slice_max(order_by = percent, n = 25), 
+        x = ~variable, y = ~ percent, 
+        type = "bar", text= ~ percent,
+        marker = list(color = "steelblue")) %>%
+  layout(title = "Top 25 : Proportion of missing data per variable",
+         xaxis = list(title = ""),
+         yaxis = list(title = "Missing data prop (%)"))
+
+#--------------------------------
+# Visualisation : naniar library 
+#--------------------------------
+library(naniar)
+gg_miss_var(data) +
+  labs(y = "NA counts", x = "Variable")
+
+# # Missing data pattern correlation heatmap between variables
+# gg_miss_upset(df_final_LB_1_mod2)
+
+#--------------------------
+# Visualisation : ggplot 
+#--------------------------
+na_summary_df <- data.frame(
+      Variable = names(data),
+      Missing_Percent =
+        sapply(data,
+               function(x) round(sum(is.na(x)) / length(x) * 100,1))
+    ) %>% 
+  filter(Missing_Percent > 0) %>% 
+  arrange(desc(Missing_Percent)) %>% 
+  slice_max(Missing_Percent, n = 35) %>%  # Top 35
+  mutate(
+    color= cut(
+      Missing_Percent,
+      breaks = c(-1, 0.00001, 10, 30, 50, 101),
+      labels = c("darkgreen", "green", "orange", "red", "darkred"),
+      right = FALSE
+    )
+  )
+
+ggplot(na_summary_df, aes(
+  x = reorder(Variable, Missing_Percent), 
+  y = Missing_Percent,
+  fill = color)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label=Missing_Percent), hjust=-0.1, size=3.5) +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Missing Values by Variable (Top 35)",
+       x = "Variable", y = "Missing Values (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+##### => Eliminate variables with a lot of NA 
+- PriseenCharge_cat_perPreg, PriseenCharge_bin : 93.7 %
+- trompe_anomalie : 172/310 = 55.48%
+
+```{r}
+df_final_complic_perPreg_mod2 <- df_final_complic_perPreg_mod2 %>% 
+  dplyr::select(-PriseenCharge_bin, 
+                -PriseenCharge_cat_perPreg,
+                -trompe_anomalie)
+```
+
+##### - Pattern and mechanism check
+
+```{r}
+#------------------
+# Define the data
+#------------------
+data <- df_final_complic_perPreg_mod2
+
+#-----------------------------------------
+# Find variables with missing values
+#-----------------------------------------
+missing_summary <- data %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+
+# Get names of variables with missing data
+vars_with_missing <- missing_summary$variable; vars_with_missing
+
+#-----------------
+#    VIM::aggr
+#-----------------
+# 한눈에 결측률과 패턴 파악 가능
+# 각 변수의 결측률과 조합 패턴을 동시에 보고 싶을 때
+library(VIM)
+VIM::aggr(data[,vars_with_missing], 
+          col = c('navyblue','red'), 
+          numbers = TRUE, 
+          sortVars = TRUE)
+
+VIM::aggr(data[,vars_with_missing], 
+     col = c('navyblue', 'yellow', 'red'), 
+     numbers = TRUE,       
+     sortVars = TRUE,      
+     labels = names(data),  
+     cex.axis = 0.7,       
+     gap = 3)              
+
+# library(VIM)
+# matrixplot(data[,vars_with_missing], sortby = "doul_abdo_avant_1_preg")
+
+#-------------------
+# mice::md.pattern
+#-------------------
+# 1. Monotonicity : monotone vs non monotone
+library(mice)
+md.pattern(data[,vars_with_missing], 
+           plot = TRUE,
+           rotate.names = TRUE)
+
+
+# 공동 결측 cluster로 묶어서 보여줌 
+library(naniar)
+naniar::vis_miss(data[,vars_with_missing], 
+                 cluster = TRUE)
+
+#--------------------------------------------
+# naniar::mcar_test() (Little's MCAR Test)
+#--------------------------------------------
+#  결측값이 완전히 무작위(MCAR)인지 검정
+# 결측 메커니즘(MCAR vs MAR vs MNAR) 판단 시
+# 표본 크기가 작으면 검정력이 낮음
+# - MCAR 기각 ≠ MNAR (MAR일 수도 있음)
+# - 모든 변수가 수치형이어야 함 (범주형 변수는 사전 처리 필요)
+#
+library(naniar)
+mcar_test(data[,vars_with_missing]) #p<0.05 : Reject of H0 -> MNAR/MAR -> mice or jomo imputation method
+
+#-----------------------------------
+# `finalfit::missing_pattern()`
+#------------------------------------
+#install.packages("finalfit")
+library(finalfit)
+data %>% missing_pattern()
+
+#----------------------------
+#  `mice::flux()`
+#-------------------------
+# 결측 데이터의 influx와 outflux 측정
+# 언제 사용하나?
+# - 변수 간 결측값 예측 관계 파악 시
+# - Imputation 순서 결정 시
+# - 변수 선택 및 제거 결정 시
+
+library(mice)
+# Influx: 다른 변수들이 해당 변수 예측에 기여하는 정도
+# Outflux: 해당 변수가 다른 변수들 예측에 기여하는 정도
+flux_result <- flux(data);flux_result
+
+# visualization 
+fluxplot(data)
+
+#---------------
+# `Hmisc::naclus()`
+#-------------------
+# **용도**: 결측 패턴의 클러스터링 분석
+# **언제 사용하나?**
+# - 복잡한 결측 패턴을 그룹화하고 싶을 때
+# - 결측값의 숨겨진 구조 탐지 시
+# - 대용량 데이터의 결측 패턴 요약 시
+#install.packages("Hmisc")
+library(Hmisc)
+na_cluster <- naclus(data)
+plot(na_cluster)
+naplot(na_cluster)
+
+#-----------------------
+# `smdi` 패키지 함수들
+#--------------------------
+# 용도: Structural Missing Data Investigation
+# **언제 사용하나?**
+# - 결측값의 구조적 특성 정량화 시
+# - MAR assumption 검증 시
+#- 결측값 편향(bias) 평가 시
+
+library(smdi)
+# 결측 패턴의 구조적 특성 분석
+smdi_asmd(data)          # Absolute Standardized Mean Differences
+smdi_hotelling(data)     # Hotelling's T-squared test
+smdi_little(data)        # Little's test (enhanced version)
+smdi_rf(data)           # Random Forest approach
+```
+
+
+## III. Imputation of missing data 
+longitudinal dataset with repeated measures.
+
+### - jomoimpute
+
+```{r}
+library(mitml)
+
+# 0. Define the data 
+data <- df_final_complic_perPreg_mod2 %>%
+  dplyr::select(-IdPregnancy,
+                -total_complications_bin_perPreg,
+                -total_complications_cat_perPreg,
+                -outcome_missing_type) %>%
+  mutate(across(where( ~ is.character(.) |
+                         is.factor(.)), as.factor))
+  
+
+# 2. Define the type for "jomoImpute" 
+# 1 = Variables for the imputation
+# 2 = predictor without NA
+# -1 = predictors without NA (not for the imputation) 
+# -2 = cluster
+all_vars <- colnames(data)
+type <- rep(1, length(vars))
+type[vars == "id_unik"] <- -2 
+
+imputed_data_O3_perPreg_jomoimpute <- jomoImpute(
+  data = data,
+  type = type,
+  n.burn = 1000,
+  n.iter = 100,
+  m = 5,
+  seed = 2025
+)
+
+```
+
+- Read the imputed data
+```{r}
+imputed_data_O3_perPreg_jo_moimpute <-
+  read.csv("imputed_data_O3_perPreg_jomoimpute.csv")
+```
+
+
+### - mice 
+
+```{r}
+library(mice)
+df_final_complic_perPreg_mod2$Complications_cat_perPreg_grouped %>% table()
+data <- df_final_complic_perPreg_mod2 %>% 
+  dplyr::select(-IdPregnancy)
+
+# 0. Find variables with missing values
+missing_summary <- data %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+# Get names of variables with missing data
+vars_with_missing <- missing_summary$variable
+
+# 1. NA counts check
+missing_counts <- sapply(data[, vars_with_missing],
+                         function(x) sum(is.na(x)))
+print(missing_counts)
+
+# 2. selection of variables having NA values
+vars_missing <- names(missing_counts[missing_counts > 1])
+
+# 3. automatic selecting methods in terms of type of variables 
+imp_methods <- sapply(data[, vars_missing], function(x) {
+  if (is.factor(x)) {
+    if (nlevels(x) == 2) return("logreg")
+    else return("polyreg")
+  } else {
+    return("pmm")
+  }
+})
+
+# 4. Imputation 
+imp_seq <- mice(data[, vars_missing],
+                method = imp_methods,
+                m = 5,
+                maxit = 20,
+                seed = 2025,
+                printFlag = FALSE)
+
+# 5. Complete dataset 
+complete_data <- complete(imp_seq,1)
+
+# 6. Check the structure of completed dataset
+str(complete_data) # 구조 확인
+sapply(complete_data, function(x) summary(x))
+
+# 7. Imputation 품질 검증
+  for(var in names(complete_data)) {
+    cat("\n=== Variable:", var, "===\n")
+    cat("Original distribution:\n")
+    print(table(data[[var]], useNA = "always"))
+    cat("After imputation:\n")
+    print(table(complete_data[[var]], useNA = "always"))
+  }
+```
+
+```{r}
+df_check <- complete_data %>% cbind(df_final_complic_perPreg_mod2 %>% dplyr::select(IdPregnancy)) %>% left_join(df_final_complic_perPreg_mod %>% distinct(id_unik, IdPregnancy), by="IdPregnancy")
+
+# 1. 존재하는 fixed_effects 변수만 추출
+valid_fixed_effects <- intersect(fixed_effects, colnames(df_check))
+df_check %>% 
+  select(id_unik, all_of(valid_fixed_effects)) %>%
+  distinct() %>% 
+  View()
+
+
+
+ls_id <- df_check %>% group_by(id_unik) %>% summarise(n=n()) %>% 
+  filter(n>1) %>% select(id_unik) %>% pull() %>% as.character()
+
+df_check %>% filter(id_unik%in% ls_id & colnames(df_check)%in% random_effects) %>% View
+df_check[,colnames(df_check)%in%fixed_effects]  %>% View
+```
+
+
+
+
+### - JOMO
+JOMO is specifically designed for multilevel (hierarchical) data, which is exactly what you have: pregnancies (level 1) nested within patients (level 2). This is a significant advantage.
+
+Multilevel imputation = it explicitly accounts for the clustering of observations (pregnancies) within individuals (patients)
+
+MAR (Missing At Random) Assumption: Multiple imputation methods like those used by JOMO assume that data are Missing At Random (MAR). MAR means that the probability of being missing depends only on the observed data, not on the unobserved data.
+
+
+
+```{r}
+library(jomo)
+# Basic JOMO call (adjust parameters as needed)
+# Y: matrix of variables to be imputed (numeric or factor converted to numeric)
+# X: design matrix for fixed effects (predictors)
+# cl: cluster variable (patient_id)
+# nburn: burn-in iterations
+# nbetween: iterations between saved imputed datasets
+# nimp: number of imputed datasets
+
+# 0. Define the data 
+data <- df_final_complic_perPreg_mod2 %>% 
+  dplyr::select(-IdPregnancy) %>% 
+  mutate(across(where(~ is.character(.) | is.factor(.)), as.factor))
+
+# 1. cluster id in numeric 
+data$id_numeric <- as.numeric(as.factor(data$id_unik))
+
+# 2. Lists of variables with NA and without NA
+all_vars <- colnames(data)
+random_effects <- c(
+  "age_maternal",
+  "live_birth_bin_all",
+  "type_preg_all_simple",
+  "gravida",
+  "para",
+  "PoidInf2",
+  "PoidSup2",
+  "methode_conception_perPreg_cat_simple_mod",
+  "conception_PMA_perPreg",
+  "Mode_accouchement",
+  "Travail_accouchement",
+  "PriseenCharge_bin",
+  "PriseenCharge_cat_perPreg",
+  "Allaitement2"
+)
+
+fixed_effects <- setdiff(all_vars, random_effects)
+fixed_effects <-  setdiff(fixed_effects,c("total_complications_bin_perPreg","total_complications_cat_perPreg", "Complications_cat_perPreg_grouped", "id_unik","id_numeric"))
+incompletes_cases <- missing_summary$variable
+completes_cases <- setdiff(setdiff(all_vars, incompletes_cases), c("id_unik", "id_numeric"))
+
+# 3. Define Y, X and cluster dataset for the jomo method
+cluster_id <- data$id_numeric # cluster patient's id in numeric 
+
+random_effects_Y = intersect(incompletes_cases, random_effects)
+random_effects_X = intersect(completes_cases, random_effects)
+
+fixed_effects_Y = intersect(incompletes_cases, fixed_effects)
+fixed_effects_X = intersect(completes_cases, fixed_effects)
+
+Z_data <-  as.data.frame(rep(1,nrow(data)))
+colnames(Z_data) <- "intercept_random"
+
+Y = as.data.frame(data[random_effects_Y])
+Y2 = as.data.frame(data[fixed_effects_Y])
+X = as.data.frame(data[random_effects_X])
+X2 = as.data.frame(data[fixed_effects_X])
+
+# 4. Apply the jomo method 
+set.seed(2025)
+# imputed_data_O3_perPreg <- 
+#   jomo2(
+#     # with NA
+#     Y = Y, # Level 1 : repeated observations
+#     Y2 = Y2, # Level 2 : on individuals
+#     # Without NA
+#     X = X,
+#     X2 = X2,
+#     # Random intercept 
+#     Z= Z_data,
+#     clus = cluster_id,  # Cluster : patient's id
+#     nburn = 1000,  # Burn-in
+#     nbetween = 20, # gap between each imputation
+#     nimp = 5) # how many imputed dataset
+
+#5. Save the imputed data
+#write.csv(imputed_data_O3_perPreg, "imputed_data_O3_perPreg.csv")
+
+imputed_data_O3_perPreg <- read.csv("imputed_data_O3_perPreg.csv") %>%
+  dplyr::select(-X)
+```
+
+```{r}
+#install.packages("mitml")
+library(mitml)
+imp_list <- jomo2mitml.list(imputed_data_O3_perPreg)
+
+# Covariates list
+predictor_vars <- setdiff(
+  all_vars,
+  c(
+    "id_unik",
+    "id_numeric",
+    "total_complications_bin_perPreg",
+    "total_complications_cat_perPreg",
+    "Complications_cat_perPreg_grouped",
+    "outcome_missing_type",
+    "Endo_Adeno_initial_participated",
+    "Endo_chir_examens_participated",
+    "Endo_dysmenorrhea_abd_participated",
+    "Endo_douleurs_participated",
+    "sante_femmes_participated",
+    "age"
+  )
+) 
+
+predictors_fixed <- intersect(predictor_vars, fixed_effects)
+predictors_random <-  intersect(predictor_vars, random_effects)
+
+
+library(brms) 
+#########################
+# TEST
+########
+uni_results <- list()
+
+# fixed effect
+for (var in predictors_fixed) {
+  formula_uni <- as.formula(
+    paste("Complications_cat_perPreg_grouped ~ age +", var, " + (1|id_unik)")
+  )
+  fit_uni <- with(imp_list, brm(formula_uni, data = data,
+                                family = categorical(),
+                                iter = 4000, warmup = 2000, chains = 4))
+  # fixed effect만 있으므로 extra.pars = TRUE 제거 
+  pooled_uni <- testEstimates(fit_uni)
+  uni_results[[var]] <- pooled_uni
+}
+
+# random effect 변수(군집 변수 등)는 fixed effect로 넣지 않음!
+for (var in predictors_random) {
+  formula_uni <- as.formula(
+    paste("Complications_cat_perPreg_grouped ~ age +", var)
+  )
+  fit_uni <- with(imp_list, brm(formula_uni, data = data,
+                                family = categorical(),
+                                iter = 4000, warmup = 2000, chains = 4))
+  # 
+  pooled_uni <- testEstimates(fit_uni, extra.pars = TRUE)
+  uni_results[[var]] <- pooled_uni
+}
+
+
+
+#경고: Bulk Effective Samples Size (ESS) is too low, indicating posterior means and medians may be unreliable.
+#Running the chains for more iterations may help. See https://mc-stan.org/misc/warnings.html#bulk-ess 
+#경고: Rows containing NAs were excluded from the model.
+##########################
+
+
+
+library(brms) 
+uni_results <- list()
+for (var in predictors_fixed) {
+  formula_uni <- as.formula(
+    paste("Complications_cat_perPreg_grouped ~ age +", var)
+  )
+  fit_uni <- with(imp_list, brm(formula_uni, data = data,
+                                family = categorical(),
+                                iter = 4000,
+                                warmup = 2000,
+                                chains =4 
+                                ))  # brms는 multinomial mixed 지원
+  pooled_uni <- testEstimates(fit_uni, extra.pars = TRUE)
+  uni_results[[var]] <- pooled_uni
+}
+
+uni_results
+
+
+```
+
+```{r}
+# multivariable analysis : DAG and the results of univariable analysis 
+selected_vars <- c("covariate1", "covariate3", ...)  # 예시
+
+# Modeling with selected variables 
+formula_multi <- as.formula(
+  paste("Complications_cat_perPreg_grouped ~", paste(selected_vars, collapse = " + "), " + (1|cluster_id)")
+)
+fit_multi <- with(imp_list, brm(formula_multi, data = ., family = categorical()))
+
+# Rubin's rule pooling 
+final_results <- testEstimates(fit_multi, var.comp = TRUE)
+summary(final_results)
+
+```
+
+
+
+```{r}
+# 1. 임퓨테이션된 데이터셋들을 담을 빈 리스트 생성
+imputed_data_list <- list()
+
+# 2. 각 임퓨테이션된 데이터셋을 반복하여 처리
+for (i in 1:imp$nimp) {
+  # jomo1ran의 결과는 Y (imputed) + X (original) 형태로 구성됨
+  # imp[[i]]는 i번째 임퓨테이션된 Y 변수들만 포함하는 매트릭스
+  # JOMO의 특성상 Y와 X가 이미 내부적으로 결합되어 있거나,
+  # Y 변수들만 임퓨테이션된 상태로 반환될 수 있으므로 구조를 확인해야 합니다.
+  # 일반적으로 jomo1ran의 반환값은 Y 변수들만 포함하는 경우가 많습니다.
+
+  # Yvars_imputed: i번째 임퓨테이션된 Y 변수들의 매트릭스
+  Yvars_imputed <- imp[[i]]
+
+  # Yvars_imputed를 데이터 프레임으로 변환하고 원래의 변수명 할당
+  df_Y_imputed <- as.data.frame(Yvars_imputed)
+  colnames(df_Y_imputed) <- colnames(Yvars) # 원래 Yvars의 변수명 사용
+
+  # Xvars (결측치 없는 변수들)과 Yvars_imputed를 결합
+  # 이 때, 원래 데이터 프레임의 다른 변수들(예: id_unik, id_numeric 등)도 함께 결합해야 합니다.
+  # 가장 안전한 방법은 원본 'data'에 Xvars를 먼저 결합하고,
+  # 그 다음 Yvars의 결측치만 imp[[i]]의 값으로 덮어쓰는 것입니다.
+
+  # 원본 'data'를 복사하여 임퓨테이션된 값을 채울 준비
+  current_imputed_df <- data # 원본 데이터 프레임 구조 유지
+
+  # Yvars에 해당하는 컬럼들의 NA 값을 임퓨테이션된 값으로 대체
+  for (col_name in colnames(Yvars)) {
+    current_imputed_df[[col_name]] <- df_Y_imputed[[col_name]]
+  }
+
+  # 임퓨테이션 과정에서 numeric으로 변환되었던 factor 변수들을 다시 factor로 변환
+  # 이 부분은 각 변수의 원래 levels를 알아야 정확하게 복원할 수 있습니다.
+  # 예시:
+  # for (col_name in colnames(Yvars)) {
+  #   if (col_name == "Complications_cat_perPreg_grouped") {
+  #     current_imputed_df[[col_name]] <- factor(current_imputed_df[[col_name]],
+  #                                                levels = 1:length(levels(data$Complications_cat_perPreg_grouped)),
+  #                                                labels = levels(data$Complications_cat_perPreg_grouped),
+  #                                                ordered = FALSE) # 다범주형이면 ordered=FALSE
+  #   } else if (col_name == "diplome_ini2") { # 다른 팩터 변수 예시
+  #     current_imputed_df[[col_name]] <- factor(current_imputed_df[[col_name]],
+  #                                                levels = 1:length(levels(data$diplome_ini2)),
+  #                                                labels = levels(data$diplome_ini2))
+  #   }
+  #   # ... 다른 factor 변수들에 대해서도 동일하게 처리
+  # }
+
+  # 더 안전한 방법은 원래 data 변수의 속성(levels)을 저장해두고 사용하는 것입니다.
+  # (이전 단계에서 factor 변수들을 numeric으로 변환하기 전에)
+  # original_factor_levels <- lapply(data %>% select(where(is.factor)), levels)
+  # original_factor_names <- names(original_factor_levels)
+
+  for (col_name in colnames(current_imputed_df)) {
+    if (col_name %in% colnames(Yvars)) { # Yvars에 있었던 변수만 다시 변환
+      if (is.factor(data[[col_name]])) { # 원본 데이터에서 factor였던 경우
+        original_levels <- levels(data[[col_name]])
+        current_imputed_df[[col_name]] <- factor(round(current_imputed_df[[col_name]]), # 반올림하여 정수로 만들고
+                                                 levels = 1:length(original_levels),
+                                                 labels = original_levels,
+                                                 ordered = is.ordered(data[[col_name]])) # 원래 순서형이었으면 ordered=TRUE
+      } else if (is.logical(data[[col_name]])) { # 원본 데이터에서 논리형(TRUE/FALSE)이었던 경우
+        current_imputed_df[[col_name]] <- as.logical(round(current_imputed_df[[col_name]]))
+      }
+    }
+  }
+
+
+  # 임퓨테이션된 데이터셋을 리스트에 추가
+  imputed_data_list[[i]] <- current_imputed_df
+}
+
+# 이제 imputed_data_list는 imp$nimp 개의 완전한 데이터셋을 포함합니다.
+
+
+
+# 분석 모델 저장용 리스트
+model_fits <- list()
+
+# 각 임퓨테이션된 데이터셋에 대해 모델 실행
+for (i in 1:imp$nimp) {
+  current_df <- imputed_data_list[[i]]
+
+  # 여기에 최종 분석 모델을 정의합니다.
+  # 예를 들어, total_complications_bin_perPreg를 예측하는 GLMM 모델
+  # 종속 변수: total_complications_bin_perPreg (이항) 또는 Complications_cat_perPreg_grouped (다항/순서형)
+  # 예측 변수: fixed_effects에 있는 변수들 + random_effects에 있는 변수들 중 필요한 것
+  # 클러스터: id_numeric (환자 ID)
+
+  # 예시 (GLMM for binary outcome):
+  # library(lme4) # 또는 glmmTMB
+  # model_formula <- as.formula(paste("total_complications_bin_perPreg ~",
+  #                                   paste(fixed_effects, collapse = " + "),
+  #                                   "+", paste(random_effects, collapse = " + "), # 고정 효과로 들어갈 다른 변수들
+  #                                   "+ (1 | id_numeric)")) # id_numeric에 대한 무작위 절편
+
+  # 혹은 `total_complications_cat_perPreg`나 `Complications_cat_perPreg_grouped`가 아웃컴이라면,
+  # 적절한 모델(multinomial/ordinal GLMM)을 사용해야 합니다.
+  # 예를 들어, glmmTMB를 사용하여 다항 로지스틱 회귀 (multinomial logistic regression)를 포함하는 GLMM:
+  # library(glmmTMB)
+  # model_formula <- as.formula(paste("Complications_cat_perPreg_grouped ~",
+  #                                   paste(fixed_effects, collapse = " + "),
+  #                                   "+ (1 | id_numeric)"))
+  # current_model <- glmmTMB(model_formula,
+  #                          data = current_df,
+  #                          family = multinomial(link = "logit"))
+
+
+  # 중요한 것은 'id_numeric'을 클러스터 변수로 사용하여 환자 내 상관성을 고려하는 것입니다.
+  # 예시 (임의의 이항 GLM 모델. 실제로는 GLMM 사용을 권장합니다.)
+  # GLMM 사용이 더 적절합니다.
+  current_model <- glm(total_complications_bin_perPreg ~ age_maternal + gravida + PriseenCharge_bin + ., # 예시 변수
+                       data = current_df,
+                       family = binomial(link = "logit"))
+
+
+  # 각 모델 결과를 리스트에 저장
+  model_fits[[i]] <- current_model
+}
+
+
+
+library(mice) # pool 함수 사용
+library(broom) # 모델 결과를 깔끔하게 정리 (tidy)
+library(mitools) # MIcombine 함수 사용
+
+# broom::tidy를 사용하여 각 모델의 계수를 추출하고 리스트에 저장 (mice::pool 사용 시 필요)
+# 또는 mitools::MIcombine을 바로 사용할 수도 있습니다.
+
+# mice::pool 사용 시
+# 각 모델의 summary에서 계수(estimate), 표준 오차(std.error) 등을 추출하여 pool 함수에 전달
+# 이 부분은 사용하는 모델의 클래스(glm, lmer 등)에 따라 다소 달라질 수 있습니다.
+
+# 예시 (glm 결과 pool):
+# 먼저 각 glm 모델의 계수와 분산-공분산 행렬을 추출합니다.
+coef_list <- lapply(model_fits, function(model) coef(model))
+vcov_list <- lapply(model_fits, function(model) vcov(model))
+
+# mitools::MIcombine을 사용하여 결과 통합
+pooled_results <- mitools::MIcombine(coef_list, vcov_list)
+
+summary(pooled_results)
+
+
+# 만약 lmer/glmer 등의 GLMM 모델을 사용했다면,
+# mice 패키지는 다양한 모델 결과의 pool을 지원합니다.
+# 예를 들어, `pool(fit_list)` 형태로 사용할 수 있습니다.
+# 먼저 lmer 모델의 summary를 tidyr::tidy로 변환하여 리스트로 저장해야 할 수도 있습니다.
+# 또는 `mice::pool` 함수는 `mids` 객체 (mice의 결과)로부터 직접 작동합니다.
+# JOMO 결과는 `mids` 객체가 아니므로, `mitools`를 사용하는 것이 더 직접적일 수 있습니다.
+
+
+
+```
+
+
+```{r}
+#-------------------------------------------------
+#   Define the data without outcomes variables
+#-------------------------------------------------
+data <- df_final_complic_perPreg_mod2 %>% 
+  dplyr:: select(-total_complications_bin_perPreg,
+                 -total_complications_cat_perPreg,
+                 -Complications_cat_perPreg_grouped)
+
+#--------------------------------
+# missForest : Simple imputation
+#--------------------------------
+# 1. Prepare data types
+# 1-1) Check 
+sapply(data, class)
+
+# 1-2) Transform all ordinal factor to factor 
+df_clean <- data.frame(lapply(data, function(x) {
+  if (is.factor(x)) {
+    return(as.factor(as.character(x)))
+  } else if (is.numeric(x) || is.integer(x)) {
+    return(x)
+  } else {
+    return(as.factor(as.character(x)))
+  }
+}))
+# 1-3) Recheck 
+#sapply(df_clean, class)
+
+# 2. Apply MissForest to the dataframe  
+library(missForest)
+set.seed(2025)
+imputed_result <- missForest(df_clean, ntree = 50)
+imputed_data <- imputed_result$ximp
+
+# 3. Check
+#sapply(imputed_data, function(x) sum(is.na(x)))
+
+# 4. Remove 'df_clean'
+rm(df_clean)
+
+# 5. Compare the original data vs imputed data
+for (var in names(imputed_data)) {
+  cat("\n=== Variable:", var, "===\n")
+  cat("Original distribution:\n")
+  print(table(data[[var]], useNA = "always"))
+  cat("After imputation:\n")
+  print(table(imputed_data[[var]], useNA = "always"))
+}
+```
+
+#### => Save the imputed dataset
+
+```{r}
+# update : 2025-05-27
+#----------------------------
+# Save the imputed dataset
+#----------------------------
+# Re-add outcome variables into imputed dataframe  
+outcomes <- df_final_complic_perPreg_mod2 %>% 
+  dplyr::select(Complications_cat_perPreg_grouped)
+
+# Imputed predictor + original outcome
+imputed_data_O3_perPreg <- bind_cols(imputed_data,
+                                      outcomes)
+
+# Remove the imputed data
+rm(impute_data)
+
+# Check
+str(imputed_data_O3_perPreg)
+
+# Save
+#write.csv(imputed_data_O3_perPreg,"Stage_M2_Complic_Gross/imputed_data_O3_perPreg.csv")
+```
+
+
+### <TEST> - MICE
+```{r}
+library(mice)
+data <- df_final_complic_perPreg_mod2 %>% 
+  dplyr:: select(-total_complications_bin_perPreg,
+                 -total_complications_cat_perPreg,
+                 -Complications_cat_perPreg_grouped)
+
+# 0. Find variables with missing values
+missing_summary <- data %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+
+# Get names of variables with missing data
+vars_with_missing <- missing_summary$variable
+
+# 1. NA counts check
+missing_counts <- sapply(data[, vars_with_missing],
+                         function(x) sum(is.na(x)))
+print(missing_counts)
+
+# 2. selection of variables having NA values
+vars_missing <- names(missing_counts[missing_counts > 1])
+
+# 3. automatic selecting methods in terms of type of variables 
+imp_methods <- sapply(data[, vars_missing], function(x) {
+  if (is.factor(x)) {
+    if (nlevels(x) == 2) return("logreg")
+    else return("polyreg")
+  } else {
+    return("pmm")
+  }
+})
+
+# 4. Imputation 
+imp_seq <- mice(impute_data[, vars_missing],
+                method = imp_methods,
+                m = 5,
+                maxit = 20,
+                seed = 2025,
+                printFlag = FALSE)
+
+# 5. Complete dataset 
+complete_data <- complete(imp_seq,1)
+
+# 6. Check the structure of completed dataset
+str(complete_data) # 구조 확인
+sapply(complete_data, function(x) summary(x))
+
+# 7. Imputation 품질 검증
+  for(var in names(complete_data)) {
+    cat("\n=== Variable:", var, "===\n")
+    cat("Original distribution:\n")
+    print(table(data[[var]], useNA = "always"))
+    cat("After imputation:\n")
+    print(table(complete_data[[var]], useNA = "always"))
+  }
+```
+
+
+
+
+
+

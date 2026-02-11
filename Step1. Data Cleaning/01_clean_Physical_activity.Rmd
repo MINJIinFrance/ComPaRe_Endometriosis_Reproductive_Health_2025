@@ -1,0 +1,344 @@
+---
+title: "01_clean_Physical_activity"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Physical_activity
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+activite_physique <- read.csv(
+  "Complic_pop_QST_0331_20250407_activite_physique.csv",
+  encoding = "latin1",
+  colClasses = c(Sexe = "character")
+  )
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+activite_physique <- activite_physique %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- activite_physique %>% 
+  sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count == nrow(activite_physique)) %>%
+  as.vector() # index of columns having only NA
+```
+
+# I. Preprocessing Data
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+activite_physique <- activite_physique %>% 
+  mutate(activite_physique_participated =
+           ifelse(is.na(IdAction),"Non","Oui"))
+
+#-------------------------
+#  Character to numeric
+#-------------------------
+activite_physique <- activite_physique %>%
+  mutate(across(c(5, 6, 9, 10, 13, 14, 16, 17), as.numeric))
+
+#------------------------------
+# Score : METs, IPAQ level 
+#------------------------------
+activite_physique <- activite_physique %>%
+  mutate(
+    # Convert 'jour_activite_intense' to numeric days
+    jour_intense = case_when(
+      jour_activite_intense == "0 jour" ~ 0,
+      jour_activite_intense == "1 jour" ~ 1,
+      jour_activite_intense == "2 jours" ~ 2,
+      jour_activite_intense == "3 jours" ~ 3,
+      jour_activite_intense == "4 jours" ~ 4,
+      jour_activite_intense == "5 jours" ~ 5,
+      jour_activite_intense == "6 jours" ~ 6,
+      jour_activite_intense == "7 jours" ~ 7,
+      TRUE ~ NA_real_
+    ),
+    # Convert 'jour_activite_modere' to numeric days
+    jour_modere = case_when(
+      jour_activite_modere == "0 jour" ~ 0,
+      jour_activite_modere == "1 jour" ~ 1,
+      jour_activite_modere == "2 jours" ~ 2,
+      jour_activite_modere == "3 jours" ~ 3,
+      jour_activite_modere == "4 jours" ~ 4,
+      jour_activite_modere == "5 jours" ~ 5,
+      jour_activite_modere == "6 jours" ~ 6,
+      jour_activite_modere == "7 jours" ~ 7,
+      TRUE ~ NA_real_
+    ),
+    # Convert 'jour_activite_marche' to numeric days
+    jour_marche = case_when(
+      jour_activite_marche == "0 jour" ~ 0,
+      jour_activite_marche == "1 jour" ~ 1,
+      jour_activite_marche == "2 jours" ~ 2,
+      jour_activite_marche == "3 jours" ~ 3,
+      jour_activite_marche == "4 jours" ~ 4,
+      jour_activite_marche == "5 jours" ~ 5,
+      jour_activite_marche == "6 jours" ~ 6,
+      jour_activite_marche == "7 jours" ~ 7,
+      TRUE ~ NA_real_
+    ),
+    # Calculate total days
+    jour_total = if_else(
+      is.na(jour_intense) & is.na(jour_modere) & is.na(jour_marche),
+      NA_real_,
+      # Si les trois colonnes sont NA, alors jour_total = NA
+      rowSums(across(
+        c(jour_intense, jour_modere, jour_marche)
+      ), na.rm = TRUE)  # Sinon, somme ligne par ligne
+    ),
+    # Calculate minutes for each activity type
+    minute_intense = 60 * if_else(is.na(heure_act_int__1_), 0, heure_act_int__1_) +
+      if_else(is.na(minute_act_int__1_), 0, minute_act_int__1_),
+    minute_modere = 60 * if_else(is.na(heure_act_mod__1_), 0, heure_act_mod__1_) +
+      if_else(is.na(minute_act_mod__1_), 0, minute_act_mod__1_),
+    minute_marche = 60 * if_else(is.na(heure_marche__1_), 0, heure_marche__1_) +
+      if_else(is.na(minute_marche__1_), 0, minute_marche__1_),
+    minute_intense = case_when(
+      jour_intense == 0 ~ 0,
+      is.na(heure_act_int__1_) &
+        is.na(minute_act_int__1_) ~ NA,
+      TRUE ~ minute_intense
+    ),
+    minute_modere = case_when(
+      jour_modere == 0 ~ 0,
+      is.na(heure_act_mod__1_) &
+        is.na(minute_act_mod__1_) ~ NA,
+      TRUE ~ minute_modere
+    ),
+    minute_marche = case_when(
+      jour_modere == 0 ~ 0,
+      is.na(heure_marche__1_) &
+        is.na(minute_marche__1_) ~ NA,
+      TRUE ~ minute_marche
+    ),
+    minute_assis = 60 * if_else(is.na(heure_assis__1_), 0, heure_assis__1_) +
+      if_else(is.na(minute_assis__1_), 0, minute_assis__1_),
+    minute_assis = case_when(
+      is.na(heure_assis__1_) & is.na(minute_assis__1_) ~ NA,
+      TRUE ~ minute_assis
+    ),
+    sedentarite = case_when(
+      minute_assis__1_ >= 480 ~ "Très sédentaire",
+      minute_assis__1_ < 480 &
+        minute_assis__1_ >= 240 ~ "Moyennement sédentaire",
+      minute_assis__1_ < 240 ~ "Peu sédentaire",
+      TRUE ~ NA
+    ),
+    
+    # Calculate METs for each activity type
+    MET_marche = 3.3 * minute_marche * jour_marche,
+    MET_modere = 4.0 * minute_modere * jour_modere,
+    MET_intense = 8 * minute_intense * jour_intense,
+    MET_total = if_else(
+      is.na(MET_marche) & is.na(MET_modere) & is.na(MET_intense),
+      NA_real_,
+      rowSums(across(c(
+        MET_marche, MET_modere, MET_intense
+      )), na.rm = TRUE)
+    ),
+    
+    # Classify IPAQ level
+    IPAQ = case_when(
+      is.na(jour_activite_intense) ~ "",
+      (jour_intense >= 3 & MET_intense >= 1500) |
+        (jour_total >= 7 & MET_total >= 3000) ~ "high",
+      (jour_intense >= 3 & minute_intense >= 20) |
+        (jour_modere >= 5 & minute_modere >= 30) |
+        (jour_total >= 5 & MET_total >= 600) ~ "moderate",
+      MET_total == 0 ~ "low",
+      TRUE ~ "low"
+    ) %>% factor(levels=c("low","moderate","high"))
+  )
+
+#Recodage des variables afin de passer des deux variables (heure et minute) à une seule variable temps.
+
+#---------------------------------------
+# Selection of only necessary variables 
+#---------------------------------------
+activite_physique_selected <- 
+  activite_physique %>% 
+  select(
+    -c(
+    StatusParticipant,
+    heure_act_int__1_,
+    minute_act_int__1_,
+    heure_act_mod__1_,
+    minute_act_mod__1_,
+    heure_marche__1_,
+    minute_marche__1_,
+    heure_assis__1_,
+    minute_assis__1_,
+    raison_autant_act,
+    commentaires_activite_physique,
+    DateValidation,
+    Date_naissance,
+    Sexe,
+    campagne)
+    )
+
+# Sédentarité : distribution tel que dans l'étude suivante :"Emmanuel Stamatakis, Joanne Gale, Adrian Bauman, Ulf Ekelund, Mark Hamer, Ding Ding, Sitting Time, Physical Activity, and Risk of Mortality in Adults,Journal of the American College of Cardiology,Volume 73, Issue 16,2019,Pages 2062-2072,ISSN 0735-1097"
+
+#-----------------------------------
+# Diviser les variables en terciles
+#-----------------------------------
+# ATTNETION : Il faut corriger ces codes dessous selon dataset
+
+# 1. character to numeric
+activite_physique_selected <- 
+  activite_physique_selected %>%
+  mutate(across(
+    starts_with("jour_")| starts_with("minute_")| starts_with("MET_"),
+    ~as.numeric(.)))
+
+
+# 2. minute_intense : num->cat
+quantiles <- quantile(
+  activite_physique_selected$minute_intense,
+  probs = c(1/3, 2/3),na.rm = TRUE) %>% round()
+
+activite_physique_selected <- activite_physique_selected %>%
+  mutate(
+    tercile_minute_intense = case_when(
+      minute_intense == quantiles[[1]] ~
+        as.character(quantiles[1]),
+      minute_intense <= quantiles[[2]] &
+        minute_intense > quantiles[[1]] ~
+        paste0(quantiles[1], "-", quantiles[2]),
+      minute_intense > quantiles[[2]] ~
+        paste0(quantiles[2], " or more"),
+      TRUE ~ NA
+    ) %>% as.factor()
+  )
+rm(quantiles)
+
+# 3. minute_modere : num->cat
+quantiles <- quantile(
+  activite_physique_selected$minute_modere,
+  probs = c(1 / 3, 2 / 3),na.rm = TRUE)%>% round()
+
+activite_physique_selected <- activite_physique_selected %>%
+  mutate(
+    tercile_minute_modere = case_when(
+      minute_modere <= quantiles[[1]] ~ 
+        paste0(quantiles[1]," or less"),
+      minute_modere <= quantiles[[2]] &
+        minute_intense > quantiles[[1]] ~ 
+        paste0(quantiles[1], "-", quantiles[2]),
+      minute_modere > quantiles[[2]] ~ 
+        paste0(quantiles[2]," or more"),
+      TRUE ~ NA
+    ) %>% 
+      as.factor()
+  )
+rm(quantiles)
+
+# 4. minute_marche : num->cat
+quantiles <- quantile(
+  activite_physique_selected$minute_marche,
+  probs = c(1 / 3, 2 / 3),na.rm = TRUE) %>% round()
+
+activite_physique_selected <- activite_physique_selected %>%
+  mutate(
+    tercile_minute_marche = case_when(
+      minute_marche <= quantiles[[1]] ~ 
+        paste0(quantiles[1]," or less"),
+      minute_marche <= quantiles[[2]] &
+        minute_marche > quantiles[[1]]~ 
+        paste0(quantiles[1], "-", quantiles[2]),
+      minute_marche > quantiles[[2]] ~ 
+        paste0(quantiles[2]," or more"),
+      TRUE ~ NA
+    ) %>% 
+      as.factor()
+  )
+
+# 5. Add the class : Je ne sais pas 
+activite_physique_selected <- activite_physique_selected %>%
+  mutate(
+    sedentarite = case_when(
+      info_tps_passe_assis == "Je ne sais pas" ~ 
+        "Je ne sais pas",
+      TRUE ~ sedentarite
+    ),
+    
+    tercile_minute_intense = case_when(
+      info_tps_passe_atc_int == "Je ne sais pas" ~ 
+        "Je ne sais pas",
+      TRUE ~ tercile_minute_intense
+    ),
+    
+    tercile_minute_marche = case_when(
+      info_tps_passe_marche == "Je ne sais pas" ~ 
+        "Je ne sais pas",
+      TRUE ~ tercile_minute_marche
+    )
+  )
+```
+
+
+# II. Final dataset
+
+```{r}
+activite_physique_final <- activite_physique_selected %>%
+  distinct(id_unik,
+           IdAction, 
+           IPAQ,
+           activite_physique_participated) %>% 
+  mutate(across(-c(id_unik),~
+                  case_when(
+                    is.na(IdAction) ~ "Not_answered",
+                    TRUE  ~ .)
+                  )
+         ) %>%
+  select(-IdAction)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(activite_physique_final,"activite_physique_final.csv")
+```
+
+

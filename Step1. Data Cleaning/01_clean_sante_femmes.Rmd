@@ -1,0 +1,480 @@
+---
+title: "01_clean_sante_femmes"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_sante_femmes
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+
+# 0.Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+# Sante_femmes <- read.csv("~/Projet/0.Data/complication_pop_QST_0374_20250226_sante_femmes.csv",fileEncoding = "latin1",colClasses = c(Sexe = "character"))
+Sante_femmes <- 
+  read.csv("Complic_pop_QST_0374_20250407_sante_femmes.csv",
+           fileEncoding = "latin1",
+           colClasses = c(Sexe = "character"))
+
+#------------------------------------------------
+# Replace cells with nothing or spaces with NA
+#------------------------------------------------
+Sante_femmes <- Sante_femmes %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")))%>% 
+  mutate_all(~str_trim(.))
+
+#-----------------------
+# character to numeric : age and duration 
+#-----------------------
+Sante_femmes <- Sante_femmes %>%
+  mutate_at(vars(5,7,13:15,19:20,22:29), as.numeric)
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- Sante_femmes %>% sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(Sante_femmes)) %>% as.vector() # index of columns having only NA
+Sante_femmes <- Sante_femmes[,-index_col_NA]
+
+#-----------------------------------------------------
+# Replace non-standard apostrophes with standard ones 
+#-----------------------------------------------------
+# French Accent : œ, è
+Sante_femmes <- Sante_femmes %>%
+  mutate(across(starts_with("type_trt_meno_ini"), ~ gsub("phyto-\u009cstrogène\u0085", "phyto-œstrogène…", .)))
+```
+
+# I. Preprocessing Data
+## - Outlier 
+```{r}
+#----------------
+# age_menopause  
+# - We ignore this information due to its low reliability caused by the inaccurate definition of menopause
+#----------------
+# 9118E309FCA262F796F5 : 15(age de regles) , age_menopause 17 years old
+# but she has a history of grossesse (IVG) 2017-04-29 (20 years old)          
+# Sante_femmes$age_menopause %>% summary
+# Sante_femmes %>% filter(id_unik=="9118E309FCA262F796F5") %>% dplyr::select(age_regles_ini,menopause_ini,age_menopause,trait_menopause_ini)
+# grossesse_mod %>% filter(id_unik=="9118E309FCA262F796F5")
+# ((as.Date("2017-04-29")-as.Date("1996-12-25"))/365) %>% as.numeric()
+```
+
+## - Create new variables
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+Sante_femmes <- Sante_femmes %>% 
+  mutate(sante_femmes_participated=ifelse(is.na(IdAction), "Non","Oui"))
+
+# Creation of indicators for each modality
+#------------------------------------------------------
+# Hormonal contraception vs non-hormonal contraception
+#------------------------------------------------------
+# 1.Extracts contraception-related data from Sante_femmes
+new_dataframe <- Sante_femmes %>%
+  dplyr::select(id_unik, 
+         starts_with("typ_contrac_ini"), 
+         contraception_ini)
+
+# 2.Cleans up the text fields by removing extra spaces
+new_dataframe <- new_dataframe %>% mutate_all(~str_trim(.))
+
+# 3.Defines a function to classify individuals based on their contraception type
+contra_hormonal <- c( "Une contraception orale régulière (la pilule)" ,
+                      "Un implant contraceptif",
+                      "Un anneau contraceptif",
+                      "Un stérilet (DIU : Dispositif intra-utérin)")
+
+# 4.Function to categorize contraception as hormonal, non-hormonal, or unknown
+recode_contraception_hormonal <- function(row, part) {
+  sub_row_contra_indic <- row[7] # Extracts the value of `contraception_ini`
+  sub_row_contra <- row[2:6] # Extracts values of `typ_contrac_ini_1` to `typ_contrac_ini_5`
+  
+  if (any(part %in% sub_row_contra)) {
+    return("Contraception hormonal")
+  } else if (any(c("Je ne souhaite pas répondre", "Non") %in% sub_row_contra_indic )) {
+    return("Pas de contraception ou ne souhaite pas répondre")
+  } else {
+    has_value <- any(!is.na(sub_row_contra) & sub_row_contra != "")
+    if (has_value) {
+      return("Contraception non hormonal")
+    } else {
+      return(NA_character_) # NA
+    }
+  }
+}
+
+# 5.Applying the function to each row in the dataset
+new_dataframe$indic_contra_hormonal <- apply(new_dataframe, 1, function(row) {
+  recode_contraception_hormonal(row, contra_hormonal)
+})
+
+# 6.Merging the classification back into the original dataset(Sante_femme)
+Sante_femmes=merge(Sante_femmes,
+               new_dataframe[, c("id_unik","indic_contra_hormonal")],
+               by = "id_unik",
+               all.x = FALSE )
+
+# 7.Cleaning up temporary dataframe
+rm(new_dataframe)
+
+# 8. calculating the maximum duration of hormonal contraception use : numeric and categories
+Sante_femmes$duree_contra_hormonal_max=with(Sante_femmes, pmax(duree_pilule, duree_sterilet,duree_implant,na.rm=TRUE)) 
+summary(Sante_femmes$duree_contra_hormonal_max)
+
+# categories 
+quantiles <- quantile(Sante_femmes$duree_contra_hormonal_max, probs = c(1/3, 2/3),na.rm=TRUE)
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    duree_contra_hormonal_cat = case_when(
+      indic_contra_hormonal %in% c("Pas de contraception ou ne souhaite pas répondre", 
+                                   "Contraception non hormonal") ~ 
+        "Pas de contraception hormonale ou ne souhaite pas répondre",
+      duree_contra_hormonal_max <= quantiles[[1]]  ~ "<=2",
+      duree_contra_hormonal_max > quantiles[[1]] & duree_contra_hormonal_max <= quantiles[[2]] ~ "]2;13]",
+      duree_contra_hormonal_max > quantiles[[2]]  ~ ">13",
+      TRUE ~ NA_character_
+    ) %>% 
+      factor(levels = c("Pas de contraception hormonale ou ne souhaite pas répondre", "<=2", "]2;13]", ">13"), ordered = TRUE)
+  )
+
+#-----------------------------------------------
+# Hormonal vs non-hormonal Menopause treatment
+#-----------------------------------------------
+# 1.Extracts menopause treatment-related data from Sante_femmes
+new_dataframe <- Sante_femmes %>% 
+  dplyr::select(id_unik,  starts_with("type_trt_meno_ini"))
+
+# 2.Trimming whitespace from all columns
+new_dataframe <- new_dataframe %>% mutate_all(~str_trim(.))
+
+# 3.Creating a menopause treatment indicator
+new_dataframe$indic_trt_hormonal_meno <- as.factor(apply(new_dataframe, 1, function(row) {
+  if ("Traitement hormonal de la ménopause (THM)" %in% row) {
+    "traitement hormonal"
+  } else if (any(row %in% c("Traitement symptomatique non hormonal (vitamine E, homéopathie, phyto-œstrogène…)", "Autre"))) {
+    "traitement non hormonal"
+  } else {
+    NA
+  }
+}))
+
+# 4.Merging the new indicator into the main dataset         
+Sante_femmes <- Sante_femmes %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, indic_trt_hormonal_meno),
+            by = "id_unik")
+
+# 5.Removing the temporary dataframe
+rm(new_dataframe)
+
+#------------------------------
+# Nombre de grossesse : catégories
+#------------------------------
+Sante_femmes$nb_grossesses_ini=ifelse(
+  Sante_femmes$deja_enceinte_ini=="Non",0,Sante_femmes$nb_grossesses_ini)
+
+# Creating the categorical variable : tercile_nb_grossesses_ini
+quantiles <- quantile(Sante_femmes$nb_grossesses_ini, probs = c(1/3, 2/3), na.rm = TRUE) 
+Sante_femmes <- Sante_femmes %>%
+  mutate(nb_grossesses_ini=as.numeric(nb_grossesses_ini)) %>% 
+  mutate(
+    tercile_nb_grossesses_ini = case_when(
+      nb_grossesses_ini == quantiles[[1]]  ~ "0",
+      nb_grossesses_ini == quantiles[[2]] ~ "1",
+      nb_grossesses_ini > quantiles[[2]] ~ "2+",
+      TRUE ~ NA_character_
+    )%>% 
+      factor(levels=c("0","1","2+"), ordered = TRUE)
+  ) %>% 
+  mutate(tercile_nb_grossesses_ini=factor(
+    tercile_nb_grossesses_ini,levels=c("0","1","2+"), ordered = TRUE))
+
+#------------
+#  Menopause : Staus of menopause and the treatement
+#------------
+Sante_femmes <- Sante_femmes %>%
+  mutate_all(~str_trim(.)) %>% 
+  mutate(
+    menopause2 = case_when(
+      menopause_ini == "Non" ~ "Pas de ménopause",
+      menopause_ini == "Je ne sais pas" ~ "Ne sais pas si ménopause",
+      menopause_ini %in% c("Oui", "Péri-ménopause : règles irrégulières, bouffées de chaleur, sueurs et troubles de l'humeur") & trait_menopause_ini == "Non" ~ "Ménopause, sans traitement",
+      menopause_ini %in% c("Oui", "Péri-ménopause : règles irrégulières, bouffées de chaleur, sueurs et troubles de l'humeur") & trait_menopause_ini == "Oui" & indic_trt_hormonal_meno == 0 ~ "Ménopause, traitement non hormonal",
+      menopause_ini %in% c("Oui", "Péri-ménopause : règles irrégulières, bouffées de chaleur, sueurs et troubles de l'humeur") & trait_menopause_ini == "Oui" & indic_trt_hormonal_meno == 1 ~ "Ménopause, traitement hormonal",
+      TRUE ~ NA_character_  # Missing data
+    )
+  )
+
+#-----------------
+# Total menopause : including péri-ménoapuse
+#-----------------
+Sante_femmes <- Sante_femmes %>% 
+  mutate(menopause_ini2= ifelse(menopause_ini=="Péri-ménopause : règles irrégulières, bouffées de chaleur, sueurs et troubles de l'humeur","Oui",menopause_ini))
+
+#----------------------
+# Status of menopause : ménopause précoce, ménopause normale, etc
+#----------------------
+median(Sante_femmes$age_menopause, na.rm = TRUE) # 30 years old
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    status_menopause = case_when(
+      menopause_ini == "Non" ~ "Pas de ménopause",
+      menopause_ini == "Je ne sais pas" ~ "Ne sait pas si ménopause",
+      age_menopause <= 40 ~ "ménopause précoce",
+      age_menopause > 40 ~ "menopause",
+      TRUE ~ NA_character_  # Missing data
+    )
+  )
+table(Sante_femmes$status_menopause, useNA = 'a')
+
+#-----------------
+#  Age menarche  
+# Ealry menarche(<12) associated with an increased risk of endometriosis 
+# Nnoaham et al. (2012), Lu et al. (2022), Candiani et al.(1991), Treloar et al.(2010)
+#-----------------
+# Ealry menarche(<12)
+# Look at tercile : 12 13
+Sante_femmes$age_regles_ini <- Sante_femmes$age_regles_ini %>% as.numeric()
+quantiles <- quantile(Sante_femmes$age_regles_ini, probs = c(1/3, 2/3), na.rm = TRUE) # 12,13
+
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    age_regle_cat = case_when(
+      connais_age_regles_ini == "Non" ~ 
+        "nsp",
+      age_regles_ini < quantiles[[1]] ~ 
+        "<12",
+      age_regles_ini >= quantiles[[1]] & age_regles_ini < quantiles[[2]] ~
+        "12-13",
+      age_regles_ini >= quantiles[[2]] ~ 
+        ">13",
+      TRUE ~ NA_character_
+    ) %>% 
+     factor(levels = c("<12", "12-13", ">13","nsp"), ordered = FALSE),
+    
+    age_regle_cat_simple = case_when(
+      connais_age_regles_ini == "Non" ~"nsp",
+      age_regles_ini < 12 ~ "<12",
+      age_regles_ini >= 12 ~ ">=12",
+      TRUE ~ NA_character_
+    )
+  )
+
+Sante_femmes$age_regle_cat %>% table(useNA = "a")
+
+#---------------------
+# Time breastfeeding 
+#---------------------
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    allaitement2 = case_when(
+      allaitement == "Oui" ~ "Allaitement",
+      nb_grossesses_ini == 0 ~ "Jamais enceinte",
+      allaitement == "Non" & nb_grossesses_ini >= 1 ~ "Déjà enceinte et pas d'allaitement",
+      TRUE ~ NA_character_  # Missing value
+    )
+  )
+
+#---------------------------------------------
+# Mean duration of breastfeeding for children 
+#---------------------------------------------
+Sante_femmes <- Sante_femmes %>%
+  mutate(moyenne_allaitement = rowMeans(dplyr::select(., starts_with("Duree_allaitement_enf")) %>%
+    mutate(across(everything(), as.numeric)), na.rm = TRUE))
+
+
+# Choose the cut according to the tercile
+quantiles <- quantile(Sante_femmes$moyenne_allaitement, probs = c(1/3, 2/3), na.rm = TRUE)
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    tercile_moyenne_allaitement = case_when(
+      allaitement2 %in% c("Déjà enceinte et pas d'allaitement", "Jamais enceinte") ~ 
+        "Pas d'allaitement ou jamais enceinte",
+      moyenne_allaitement <= quantiles[[1]] ~ "<=3",
+      moyenne_allaitement > quantiles[[1]] & moyenne_allaitement <= quantiles[[2]] ~ "]3;6]",
+      moyenne_allaitement > quantiles[[2]] ~ ">6",
+      TRUE ~ NA_character_
+    ) %>% 
+      factor(levels =c("Pas d'allaitement ou jamais enceinte","<=3","]3;6]",">6"), ordered = FALSE)
+  )
+
+#-----------------------
+# Number of pregnancies 
+#-----------------------
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    grossesse_actu_ini2 = ifelse(
+      deja_enceinte_ini == "Non" |menopause_ini == "Oui" ,"Menopause ou jamais enceinte",grossesse_actu_ini)
+  )
+
+Sante_femmes <- Sante_femmes %>%
+  mutate(nb_grossesses_ini2 = ifelse(
+    Sante_femmes$nb_grossesses_ini == 0,
+    NA,
+    as.numeric(Sante_femmes$nb_grossesses_ini)
+  ))
+
+#Choose the cut according to the tercile
+quantiles <- quantile(Sante_femmes$nb_grossesses_ini2, probs = c(1/3, 2/3), na.rm = TRUE); quantiles
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    nb_grossesses_ini_cat = case_when(
+      deja_enceinte_ini == "Non" | nb_grossesses_ini == 0  ~ "Pas de grossesse",
+      nb_grossesses_ini2 <= quantiles[[1]] ~ "1",
+      nb_grossesses_ini2 ==quantiles[[2]] ~ "2",
+      nb_grossesses_ini2 > quantiles[[2]] ~ "3+",
+      TRUE ~ NA_character_
+    ) %>% 
+      factor(levels = c("Pas de grossesse", "1","2","3+"), ordered = TRUE)
+  )
+
+#-----------------------
+#  Number of children
+#-----------------------
+# nb_enfts_vivants_ini
+Sante_femmes$nb_enfts_vivants_ini <- as.numeric(Sante_femmes$nb_enfts_vivants_ini)
+
+Sante_femmes <- Sante_femmes %>%
+  mutate(
+    nb_enfts_vivants_ini_cat = case_when(
+      deja_enceinte_ini == "Non" ~ "0",
+      nb_enfts_vivants_ini == 0 ~ "0",
+      nb_enfts_vivants_ini == 1 ~ "1",
+      nb_enfts_vivants_ini == 2 ~ "2",
+      nb_enfts_vivants_ini > 2 ~ ">2",
+      TRUE ~ NA_character_
+    ) %>%
+      factor(levels = c("0", "1", "2", ">2"), ordered = TRUE)
+  )
+
+#------------------------------------
+# Number of live birth at least once : outcome 
+#------------------------------------
+# 1. Add a new variable : live birth yes or no by considering the number of living child
+Sante_femmes <-  Sante_femmes %>% 
+  mutate(live_birth_bin_atleast=
+           ifelse(nb_enfts_vivants_ini>=1,"Oui","Non"))
+
+# 2. Create a temporary dataframe by merging the infromation of module grossesse 
+new_dataframe <- Sante_femmes %>% 
+  distinct(id_unik,live_birth_bin_atleast) %>% 
+  left_join(
+    grossesse_mod %>%
+      distinct(id_unik,live_birth_bin_atleast_once_all),
+    by="id_unik")
+
+# 2. Create a new variable :
+# - if the number of living children is initially at least one in the SanteFemmes, we consider that the woman has had at least one live birth, even if the specific pregnancy information in module grossesse is missing
+# - 48 women with at least one living child did not record their information regarding the pregnancy related to a live birth
+new_dataframe <- new_dataframe %>% 
+  mutate(
+    live_birth_bin_atleast_merged =
+      case_when(
+        live_birth_bin_atleast=="Oui"&
+          is.na(live_birth_bin_atleast_once_all) ~"Oui",
+        TRUE ~ live_birth_bin_atleast_once_all
+           ))
+
+# 3. Add the new variable to the main grossesse module 
+grossesse_mod_final <- grossesse_mod_final %>% 
+  left_join(new_dataframe %>%
+              dplyr::select(id_unik,live_birth_bin_atleast_merged),
+            by="id_unik")
+
+# 4.  Delete the temporary dataframe
+rm(new_dataframe)
+
+# Resave the grossesse_mod_final with the new information 
+#write.csv(grossesse_mod_final, "grossesse_mod_final.csv")
+```
+
+# II. Final dataset
+
+```{r}
+Sante_femmes_final <- Sante_femmes %>%
+  dplyr::select(
+    id_unik,
+    IdAction,
+    age_regles_ini,
+    age_regle_cat_simple,
+    age_regle_cat,
+# - We don't include all information related to the menopause
+    #status_menopause,
+    #menopause_ini,   
+    #menopause2,
+    #age_menopause,
+    #indic_contra_hormonal,
+    #duree_contra_hormonal_max,
+    #duree_contra_hormonal_cat,
+    #indic_trt_hormonal_meno,
+    #deja_enceinte_ini,
+    #grossesse_actu_ini2,
+    #nb_grossesses_ini2,
+    nb_grossesses_ini_cat,
+    tercile_nb_grossesses_ini,
+    #nb_enfts_vivants_ini,
+    nb_enfts_vivants_ini_cat,
+    allaitement2,
+    tercile_moyenne_allaitement, 
+    live_birth_bin_atleast,
+    sante_femmes_participated
+  ) %>% distinct() %>% 
+  mutate(across(-c(id_unik, IdAction,age_regles_ini),
+                ~ case_when(
+                  is.na(IdAction) ~ "Not_answered",
+                  TRUE ~ .
+    )
+  ))%>%
+  dplyr::select(-IdAction)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(Sante_femmes_final,"Stage_M2_Complic_Gross/Sante_femmes_final.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

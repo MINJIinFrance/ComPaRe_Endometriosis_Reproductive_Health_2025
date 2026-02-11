@@ -1,0 +1,1689 @@
+---
+title: "03_O1_descriptive_analysis"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 03_O1_descriptive_analysis
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Objective 1, Descriptive analysis 
+*Date of creation* : 2025-04-09
+*Date of update* : 2025-05-13
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+```{r}
+library(tidyverse)
+library(gt)
+library(gtsummary)
+library(readr)
+library(writexl)
+```
+
+# 0. Import data
+
+```{r}
+df_merged_filtered <- read.csv("df_merged_filtered.csv") %>%
+  dplyr::select(-X) %>%
+  distinct()
+
+df_merged_filtered %>% dim
+```
+
+# I. Characterisitics of participants
+
+```{r}
+#------------------------
+# Principale Population 
+#------------------------
+library(dplyr)
+
+df_description_population <- df_merged_filtered %>%
+  distinct(
+    id_unik,
+    age,
+    
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2,
+    situation_financiere,
+    
+    IMC2,
+    Statut_tabac_ini,
+    freq_alcool_ini,
+    
+    score_GAD7_cat,
+    score_PHQ9_cat,
+    psqif,
+    eval_sante_cat,
+    IPAQ,
+    sc_TBQ_cat,
+    
+    endo_ade_categorie,
+    type_endo,
+    stade_dvpt_legere_severe,
+    
+    nb_mal_sansEndoAde_cat,
+    metabolic_syndrome,
+    gynecologique_diseases,
+    infertility_comorbidite,
+    autoimmune_diseases,
+    
+    age_regle_cat_simple
+  ) %>%
+  mutate(across(
+    .cols = where(is.factor), # 또는 특정 변수들을 선택할 수도 있어
+    .fns = ~na_if(as.character(.), "Not_answered")
+  )) %>%
+  mutate(across(
+    .cols = where(is.character),
+    .fns = ~na_if(., "Not_answered")
+  ))
+
+
+tab_description_population <- df_description_population %>% 
+  dplyr::select(-id_unik) %>%
+  tbl_summary(
+    by = NULL,
+    digits =  ~ 1,
+    statistic = list(
+      all_continuous() ~"{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  # add_n(
+  #   statistic = "{N_nonmiss} ({p_nonmiss}%)",
+  #   col_label = "**Number of non-missing observations**",
+  #   footnote = FALSE,
+  #   last = FALSE
+  # ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(id_unik) %>% n_distinct()})**") %>%
+  bold_labels() %>% as.tibble()
+
+# Save as Excel file : update 2025-07-18
+write_xlsx(tab_description_population, 
+           "C:/Stage_Master2/Stage_M2_Complic_Gross/Table_description_population.xlsx")
+```
+
+```{r}
+#------------------------
+#     Sub-population 
+#------------------------
+data <- df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>% 
+  distinct(
+        id_unik,
+        age,
+
+        statut_marital_ini_cat,
+        diplome_ini2,
+        situation_emploi_ini2,
+        situation_financiere,
+        
+        IMC2,
+        Statut_tabac_ini,
+        freq_alcool_ini,
+        
+        score_GAD7_cat,
+        score_PHQ9_cat,
+        psqif,
+        eval_sante_cat,
+        IPAQ,
+        sc_TBQ_cat,
+        
+        endo_ade_categorie,
+        type_endo,
+        stade_dvpt_legere_severe,
+
+        nb_mal_sansEndoAde_cat,
+        metabolic_syndrome,
+        gynecologique_diseases,
+        infertility_comorbidite,
+        autoimmune_diseases,
+
+        age_regle_cat_simple
+      ) %>%
+  mutate(across(
+    .cols = where(is.factor), # 또는 특정 변수들을 선택할 수도 있어
+    .fns = ~na_if(as.character(.), "Not_answered")
+  )) %>%
+  mutate(across(
+    .cols = where(is.character),
+    .fns = ~na_if(., "Not_answered")
+  ))
+
+tab_description_subpopulation <- data %>% 
+  dplyr::select(-id_unik) %>%
+  tbl_summary(
+    by = NULL,
+    digits =  ~ 1,
+    statistic = list(
+      all_continuous() ~"{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  # add_n(
+  #   statistic = "{N_nonmiss} ({p_nonmiss}%)",
+  #   col_label = "**Number of non-missing observations**",
+  #   footnote = FALSE,
+  #   last = FALSE
+  # ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(id_unik) %>% n_distinct()})**") %>%
+  bold_labels() %>% as.tibble()
+
+# Save as Excel file : update 2025-07-18
+write_xlsx(
+  tab_description_subpopulation,
+  "C:/Stage_Master2/Stage_M2_Complic_Gross/Table_description_subpopulation.xlsx")
+```
+
+
+# II. Reproductive health
+## Per ID
+### -Two populations
+Live birth at least once : yes/no
+Number of pregnancies
+Number of live births
+Maternal age at the 1st preg and the last preg
+
+```{r}
+library(gtsummary);library(gt)
+
+#------------------------------------
+#   gtsummary table	  : per patient 
+#------------------------------------
+# 1. ALL
+tbl_grosse_all <- df_merged_filtered %>%
+  distinct(
+    id_unik,
+  
+    live_birth_bin_atleast_once_all,
+
+    nb_total_gross,
+    nb_live_births_all,
+    
+    first_preg_age, 
+    last_preg_age_mod,
+    # Methode_conception_bin_perID,
+    # methode_conception_perID_cat_simple_mod,
+    # 
+    # Mode_accouchement_perID, 
+    # Travail_accouchement_perID,
+    # 
+    # allaitement_YN_atleast,
+    # 
+    # PriseenCharge_cat_perID, 
+    # 
+    # total_complications_bin_perID,
+    # total_complications_cat_perID,
+    # Complications_cat_perID,
+    # Complications_cat_perID_grouped
+    
+  ) %>%
+  # mutate(
+  #   Complications_cat_perID_grouped_mod =
+  #     ifelse(
+  #       Complications_cat_perID_grouped == "Hemorr_postpartum_single",
+  #       "Other_single",
+  #       Complications_cat_perID_grouped
+  #     )
+  # ) %>% 
+  dplyr::select(-id_unik) %>%
+  tbl_summary(
+    by = NULL,
+    digits =  ~ 1,
+    statistic = list(
+      all_continuous() ~"{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  # add_n(
+  #   statistic = "{N_nonmiss} ({p_nonmiss}%)",
+  #   col_label = "**Number of non-missing observations**",
+  #   footnote = FALSE,
+  #   last = FALSE
+  # ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(id_unik) %>% n_distinct()})**") %>%
+  bold_labels()
+
+# 2. Per modules
+tbl_grosse_modules <- df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>%
+  dplyr::distinct(
+    id_unik,
+    module,
+  
+    live_birth_bin_atleast_once_all,
+
+    nb_total_gross,
+    nb_live_births_all,
+    
+    first_preg_age, 
+    last_preg_age_mod,
+    
+    # Methode_conception_bin_perID,
+    # methode_conception_perID_cat_simple_mod,
+    # 
+    # Mode_accouchement_perID, 
+    # Travail_accouchement_perID,
+    # 
+    # allaitement_YN_atleast,
+    # 
+    # PriseenCharge_cat_perID, 
+    # 
+    # total_complications_bin_perID,
+    # total_complications_cat_perID,
+    # Complications_cat_perID,
+    # Complications_cat_perID_grouped
+    
+  ) %>%
+  # mutate(
+  #   Complications_cat_perID_grouped_mod =
+  #     ifelse(
+  #       Complications_cat_perID_grouped == "Hemorr_postpartum_single",
+  #       "Other_single",
+  #       Complications_cat_perID_grouped
+  #     )
+  # ) %>% 
+  dplyr::select(-id_unik) %>%
+  tbl_summary(
+    by = module,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(id_unik) %>% n_distinct()})**") %>%
+  bold_labels()
+
+# 3. Merge 
+tbl_twopops_combined <- tbl_merge(
+  tbls = list(tbl_grosse_all, tbl_grosse_modules),
+  tab_spanner = c("**Overall Population**", "**By Module**")
+); tbl_twopops_combined
+```
+### - Sous-population, n=310 
+methode de conception 
+mode d'accouchement
+phase de travail
+allaitement
+Prise en charge
+Complications 
+
+```{r}
+tbl_souspop_modules <- df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>%
+  dplyr::distinct(
+    id_unik,
+
+    Methode_conception_bin_perID,
+    methode_conception_perID_cat_simple_mod,
+    
+    Mode_accouchement_perID, 
+    Travail_accouchement_perID,
+    
+    allaitement_YN_atleast,
+    
+    PriseenCharge_cat_perID, 
+    PriseenCharge_bin,
+    
+    total_complications_bin_perID,
+    total_complications_cat_perID,
+    Complications_cat_perID,
+    Complications_cat_perID_grouped
+  ) %>%
+  mutate(
+    Complications_cat_perID_grouped_mod =
+      ifelse(
+        Complications_cat_perID_grouped == "Hemorr_postpartum_single",
+        "Other_single",
+        Complications_cat_perID_grouped
+      )
+  ) %>% 
+  dplyr::select(-id_unik) %>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>% 
+  bold_labels()
+
+tbl_souspop_modules
+```
+
+
+
+
+## Per Preg
+### - Two populations
+age_maternal
+type_preg_all
+live_birth_bin_all
+
+```{r}
+tab1 <- df_merged_filtered %>%
+  distinct(
+    IdPregnancy,
+    age_maternal,
+    type_preg_all,
+    type_preg_all_simple,
+    live_birth_bin_all
+  ) %>%
+  dplyr::select(-IdPregnancy) %>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list()
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Reproductive history in two populations**") %>% 
+  bold_labels()
+
+tab2 <-  df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>%  
+  distinct(
+    IdPregnancy,
+    age_maternal,
+    type_preg_all,
+    type_preg_all_simple,
+    live_birth_bin_all
+  ) %>%
+dplyr::select(-IdPregnancy) %>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list()
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  bold_labels()
+
+# 3. Merge 
+tbl_twopops_preg_combined <- tbl_merge(
+  tbls = list(tab1, tab2),
+  tab_spanner = c("**Overall Population**", "**By Module**")
+); tbl_twopops_preg_combined
+```
+
+### - Sous-population, n= 383 pregnancies
+Methode de conception
+Mode d'accouchement
+Phase de travail
+Allaitement
+Prise en charge
+Complications obstétricales
+
+```{r}
+tbl_souspop_preg_modules<- df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>%
+  distinct(
+    IdPregnancy,
+    
+    Methode_conception_bin_perPreg,
+    methode_conception_perPreg_cat_simple_mod,
+    
+    Mode_accouchement,
+    Travail_accouchement,
+    
+    Allaitement2,
+    mois_allaitement,
+    PriseenCharge_cat_perPreg,
+    
+    total_complications_bin_perPreg,
+    total_complications_cat_perPreg,
+    Complications_cat_perPreg,
+    Complications_cat_perPreg_grouped
+  ) %>%
+  mutate(
+    Complications_cat_perPreg_grouped_mod =
+      ifelse(
+        Complications_cat_perPreg_grouped == "Hemorr_postpartum_single",
+        "Other_single",
+        Complications_cat_perPreg_grouped
+      )
+  ) %>% 
+dplyr::select(-IdPregnancy) %>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list()
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Reproductive history (pregnancy) among the sub-population**") %>% 
+  bold_labels()
+
+tbl_souspop_preg_modules
+
+# Median
+
+new_df <- df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>% 
+  distinct(IdPregnancy, mois_allaitement)
+
+summary(new_df$mois_allaitement)
+mean(new_df$mois_allaitement, na.rm=TRUE) %>% round(1) # 4.9
+median(new_df$mois_allaitement, na.rm=TRUE) # 2
+min(new_df$mois_allaitement, na.rm=TRUE) # 0
+max(new_df$mois_allaitement, na.rm=TRUE) # 54
+sd(new_df$mois_allaitement, na.rm = TRUE) %>% round(1) # 7.9
+
+
+df_merged_filtered$operation_endo_bin %>% table(useNA = "a") %>% prop.table() %>% addmargins
+```
+
+```{r}
+df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  filter(nb_live_births_all!=0 & !is.na(total_complications_perID)) %>%
+  distinct(id_unik,PriseenCharge_bin) %>% 
+  group_by(PriseenCharge_bin) %>% 
+  summarise(n=n()) %>% 
+  mutate(somme= sum(n),
+         prop= round(n/somme,2)) %>% 
+  ungroup()
+```
+
+
+
+## **Common variables for two populations 
+### => Annexe : Combined Table for the two populations
+
+```{r}
+final_two_tbl <- tbl_merge(
+  tbls = list(tbl_twopops_combined, tbl_twopops_preg_combined),
+  tab_spanner = c("**Par Femme**", "**Par Grossesse**")
+)
+final_two_tbl_df <- final_two_tbl %>%  as.tibble()
+
+
+# Save : update 250718
+write_xlsx(final_two_tbl_df,"C:/Stage_Master2/Stage_M2_Complic_Gross/O1_twopopulations_table.xlsx")
+```
+
+
+## **Sous popoulation for preg + poulation 
+
+```{r}
+final_souspop_combined_tbl <- tbl_merge(
+  tbls = list(tbl_souspop_modules, tbl_souspop_preg_modules),
+  tab_spanner = c("**Par Femme**", "**Par Grossesse**")
+)
+final_souspop_combined_tbl_df <- final_souspop_combined_tbl %>%  as.tibble()
+
+
+# Save : update 250718
+write_xlsx(final_souspop_combined_tbl_df,"C:/Stage_Master2/Stage_M2_Complic_Gross/O1_souspop_combinded_table.xlsx")
+```
+
+
+# ----------------------------------------------------
+# IV.  Descriptive analysis
+
+## 1. Number of participants and pregnancies according to pregnancy modules
+
+  Participants : 1113 for the live birth outcome 
+  Participants in new module : 378 
+  
+  Pregnancies : 1575 (new 468/1575= 29.7%, old 1107/1575= 70.3%)
+  Pregnancies in new module : 468
+  
+```{r}
+# Participants : 1113
+df_merged_filtered %>% distinct(id_unik) %>% n_distinct()
+
+# Participants in new module : 378
+df_merged_filtered %>%filter(module=="Nouveau") %>% distinct(id_unik) %>% n_distinct()
+
+# Pregnancies : 1575
+df_merged_filtered %>% distinct(IdPregnancy) %>% n_distinct()
+
+# Pregnancies in new module : 468
+df_merged_filtered %>% filter(module=="Nouveau") %>%  distinct(IdPregnancy) %>% n_distinct()
+
+
+
+
+# Pregnancies
+df_merged_filtered %>% 
+  distinct(IdPregnancy, module) %>% 
+  count(module) %>% 
+  mutate(total = sum(n), 
+         prop = round(n / total * 100, 1))
+```
+
+
+
+### - Table 2 : Pregnancy characteristics 
+
+#### 1) Total number of pregnancies
+- Total = 1575
+- New module = 468
+- Old module = 1107
+```{r}
+df_merged_filtered %>% distinct(id_unik,nb_total_gross, nb_total_gross_NewModule, nb_total_gross_OldModule) %>% 
+  summarise(total_gross = sum(nb_total_gross),
+            newmodule_total_gross = sum(nb_total_gross_NewModule, na.rm = TRUE),
+            oldmodule_total_gross = sum(nb_total_gross_OldModule, na.rm=TRUE))
+```
+
+#### 2) Frequency : term, incomplete pregnancy
+
+Per participant (2nd Objective's outcome)
+- At least once, live birth  : Yes (902/1113,81%), No (211/1113,19%)
+
+```{r}
+df_merged_filtered %>% 
+  distinct(id_unik,live_birth_bin_atleast_once_all) %>% 
+  group_by(live_birth_bin_atleast_once_all) %>% 
+  summarise(n=n()) %>% 
+  mutate(somme= sum(n),
+         proportion= round((n/somme)*100,1))
+```
+
+Per pregnancy
+-     All modules  : Term = 474(/1575, 70%), Incomplete = 1101(/1575, 30%)
+- Only new modules : Term = 369(/468, 79%), Incomplete = 99(/468, 21%)
+
+```{r}
+df_merged_filtered %>% 
+  distinct(id_unik,IdPregnancy,live_birth_bin_all) %>% 
+  group_by(live_birth_bin_all) %>% 
+  summarise(n=n(),.groups = "drop") %>% 
+  mutate(somme= sum(n),
+         proportion= round((n/somme)*100,1))
+  
+df_merged_filtered %>% 
+  distinct(id_unik,IdPregnancy,live_birth_bin_onlynew) %>%
+  group_by(live_birth_bin_onlynew) %>% 
+  summarise(n=n(),.groups = "drop") %>%
+  filter(!is.na(live_birth_bin_onlynew)) %>% 
+  mutate(somme= sum(n),
+         proportion= round((n/somme)*100,1))
+```
+
+#### 3) maternal age at the first and last pregnancy 
+
+- mean maternal age at the first pregnancy = 31.23
+- mean maternal age at the last pregnancy = 33.9
+
+- mean maternal age : 32.14584
+```{r}
+df_merged_filtered %>% distinct(id_unik, first_preg_age, last_preg_age_mod) %>% 
+  summarise(mean_first_age= mean(first_preg_age),
+            mean_last_age= mean(last_preg_age_mod, na.rm=TRUE))
+
+
+df_merged_filtered %>% distinct(IdPregnancy, age_maternal) %>% 
+  summarise(mean_age_maternal = mean(age_maternal))
+```
+
+#### 3) For Each conception method
+
+- From 'methode_conception_perID_cat_simple_mod' including two informations : conception method and the operation for the infertility, so even old module can have conception method information, in terms of only operation. 
+
+
+```{r}
+# df_merged_filtered %>% 
+#   distinct(id_unik, methode_conception_perID_cat_simple_mod) %>% 
+#   group_by(methode_conception_perID_cat_simple_mod) %>% 
+#   summarise(n=n(), .groups = "drop") %>% 
+#   mutate(somme=sum(n),
+#          proportion= paste0(round(n/somme*100)," %"))
+
+df_merged_filtered %>% 
+  filter(module=="Nouveau") %>% 
+  distinct(id_unik, methode_conception_perID_cat_simple_mod) %>% 
+  group_by(methode_conception_perID_cat_simple_mod) %>% 
+  summarise(n=n(), .groups = "drop") %>% 
+  mutate(somme=sum(n),
+         proportion= paste0(round(n/somme*100)," %"))
+```
+
+
+- Operation : methode_perID_Operation_mod (in wide format)
+1) All:  224 / 1113 = 20.1 %
+2) New module:  72 / 378 = 19 %
+3) Non-NA only:  224 / 530 = 42.3 %
+
+```{r}
+test <- df_merged_filtered %>% 
+  left_join(
+    grossesse_mod2 %>%
+      distinct(id_unik, .keep_all = TRUE) %>%
+      dplyr::select(id_unik, methode_perID_Naturelle, methode_perID_Operation,
+             methode_perID_Medicament_sans_PMA, methode_conception_long_perID),
+    by = "id_unik"
+  ) %>%
+  dplyr::select(id_unik, module, methode_perID_IUI, methode_perID_Naturelle, 
+         methode_perID_IVF, methode_perID_Operation,
+         methode_perID_Medicament_sans_PMA, methode_conception_long_perID,
+         op_infertility_perID, methode_conception_perID_cat_simple_mod) %>%
+  
+  # Add the information of operation for the infertility to the conception method
+  mutate(
+    methode_perID_Operation_mod = case_when(
+      (is.na(methode_perID_Operation) | methode_perID_Operation == FALSE) & 
+        op_infertility_perID == "for_infertility" ~ TRUE,
+      methode_perID_Operation == TRUE ~ TRUE,
+      op_infertility_perID != "for_infertility" ~ methode_perID_Operation,
+      TRUE ~ NA 
+    )
+  )
+
+n_total <- n_distinct(test$id_unik)
+n_new <- n_distinct(test %>% filter(module == "Nouveau") %>% pull(id_unik))
+
+n_operation_mod <- test %>% 
+  distinct(id_unik, methode_perID_Operation_mod) %>% 
+  filter(methode_perID_Operation_mod == TRUE) %>% 
+  nrow()
+
+n_operation_mod_new <- test %>%
+  filter(module == "Nouveau") %>%
+  distinct(id_unik, methode_perID_Operation_mod) %>%
+  filter(methode_perID_Operation_mod == TRUE) %>%
+  nrow()
+
+n_operation_mod_nonNA <- test %>% 
+  distinct(id_unik, methode_perID_Operation_mod) %>% 
+  filter(!is.na(methode_perID_Operation_mod)) %>%
+  nrow()
+
+cat("1) All: ", n_operation_mod, "/", n_total, "=", 
+    round(100 * n_operation_mod / n_total, 1), "%\n")
+cat("2) New module: ", n_operation_mod_new, "/", n_new, "=", 
+    round(100 * n_operation_mod_new / n_new, 1), "%\n")
+cat("3) Non-NA only: ", n_operation_mod, "/", n_operation_mod_nonNA, "=", 
+    round(100 * n_operation_mod / n_operation_mod_nonNA, 1), "%\n")
+
+```
+
+
+
+
+```{r}
+
+
+# After adding the information : 224 participants among 1113  
+# ---> IF only new module, 72 participants among 378 
+#%>%filter(module=="Nouveau") 
+test %>% distinct(id_unik, methode_perID_Operation_mod) %>%
+  dplyr::select(methode_perID_Operation_mod) %>% table(useNA = "a") %>% addmargins
+
+# Just using the new module's information : 14 participants among 1113
+# ---> IF only new module, 14 participants among 378 
+test %>% distinct(id_unik, methode_perID_Operation) %>%
+  dplyr::select(methode_perID_Operation) %>% table(useNA = "a") %>% addmargins
+
+# Question : for calculating the proportion data, le total number would be 1113(all population) or 378 (sub population who answered to the new module)
+
+# 1) Adding the information of operation from chirurgie dataset
+# - 224/1113  ou 72/378
+# - or excluding all NA (respectively 584 and 735) : 224/(1113-583) ou 14/(1113-735)
+
+# 2) Just using the new module's information : 14 participants among 1113
+# - 14/1113 ou 14/378
+# - or excluding all NA (735 and 0) : 14/(1113-735) 
+
+
+##########################################################################
+test %>%
+  filter(module=="Nouveau") %>%
+  dplyr::select(id_unik, methode_conception_long_perID) %>%
+  distinct() %>% count(methode_conception_long_perID, name = "nb_patients") %>%
+  mutate(somme= sum(nb_patients),
+         proportion= round(nb_patients/somme*100,1))
+
+test %>%
+  filter(module=="Nouveau") %>%
+  dplyr::select(id_unik,op_infertility_perID) %>%
+  group_by(op_infertility_perID) %>%
+  summarise(n=n(), .groups = "drop")
+
+df_merged_filtered %>% distinct(id_unik,op_infertility_perID) %>% dplyr::select()
+test %>% distinct(id_unik, methode_conception_perID_cat_simple_mod) %>%
+  group_by(methode_conception_perID_cat_simple_mod) %>%
+  summarise(n=n())
+###################################################################################
+```
+
+#### Type of pregnancy outcome in all population : Fullterm, Preterm, F-C, IVG/IMG, Autre 
+
+All population 
+- Fullterm : 62.3
+- Preterm : 7.6
+- Fausse-couche : 20.1
+- IVG/IMG : 7.6
+- Autre : 2.3
+
+
+```{r}
+df_merged_filtered %>% distinct(id_unik, IdPregnancy,type_preg_all_simple) %>% 
+  group_by(type_preg_all_simple) %>%
+  summarise(n=n(), .groups = "drop") %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+# # New module
+# df_merged_filtered %>% 
+#   filter(module=="Nouveau") %>% 
+#   distinct(id_unik, IdPregnancy,type_preg_all_simple) %>% 
+#   group_by(type_preg_all_simple) %>%
+#   summarise(n=n(), .groups = "drop") %>% 
+#   mutate(somme=sum(n),
+#          proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+##### Delivery mode in the sub population
+
+- Per participant : Exprience of delivery mode for the participants who gave birth an infant at least once
+
+  Both : 7/321 (2.2%)
+  Only cesarean : 82/321 (25.5%)
+  Only VD : 225/321 (70.1%)
+```{r}
+df_merged_filtered %>%
+  filter(module=="Nouveau")%>% 
+  distinct(id_unik,Mode_accouchement_perID) %>% 
+  count(Mode_accouchement_perID) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+df_merged_filtered %>%
+  filter(module=="Nouveau"& live_birth_bin_atleast_once_all=="Oui")%>% 
+  distinct(id_unik,Mode_accouchement_perID) %>% 
+  count(Mode_accouchement_perID) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+- Per pregnancy :
+ the number and proportion of delivery mode used among the term pregnancies
+ 
+  Cesarean : 99/369 (26.3%)
+  VD : 278/369 (73.7%)
+```{r}
+
+df_merged_filtered %>%
+  filter(module=="Nouveau"& status_terme_all == "Terme") %>%  
+  count(Mode_accouchement) %>%
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+
+df_merged_filtered %>%
+  filter(module=="Nouveau") %>%  
+  count(Mode_accouchement) %>%
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+#### Type of labor
+- Per participant : Exprience of delivery mode for the *participants who gave birth an infant at least once*
+
+  No : 35/321 (10.9%)
+  Induced labour : 84/321 (26.2%)
+  Natural labour : 173/321 (53.9%)
+  Mixed : 7/321 (2.2%)
+  
+```{r}
+df_merged_filtered %>%
+  filter(module=="Nouveau")%>% 
+  distinct(id_unik,Travail_accouchement_perID) %>% 
+  count(Travail_accouchement_perID) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+
+df_merged_filtered %>%
+  filter(module=="Nouveau"& live_birth_bin_atleast_once_all=="Oui")%>% 
+  distinct(id_unik,Travail_accouchement_perID) %>% 
+  count(Travail_accouchement_perID) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+- Per pregnancy :
+ the number and proportion of delivery mode used *among the term pregnancies*
+ 
+  Pas de travail	42/369	(11.4 %)	
+  Travail provoqué	110/369	(29.8 %)	
+  Travail spontané	217/369	(58.8 %)
+  
+```{r}
+df_merged_filtered %>%
+  filter(module=="Nouveau") %>%  
+  count(Travail_accouchement) %>%
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+
+df_merged_filtered %>%
+  filter(module=="Nouveau"& status_terme_all == "Terme") %>%  
+  count(Travail_accouchement) %>%
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+#### Care taken among women who exprienced the incomplete pregnancy in new module
+
+  Absence : 17/81 (21%)
+  Multiple : 19/81 (7.4%)
+  Only surgical : 16/81(19.8%)
+  Only medications : 20/81(24.7%)
+  Only psychological : 2/81 (2.5%)
+  NA : 1/81 (1.2%)
+
+```{r}
+# per pregnancy 
+df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  distinct(id_unik, PriseenCharge_bin) %>% 
+  count(PriseenCharge_bin) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+# Per pregnancy, incomplete pregnancy and complete pregnancy 
+df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  group_by(status_terme_all) %>% 
+  distinct(id_unik,PriseenCharge_bin) %>% 
+  count(PriseenCharge_bin) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+df_merged_filtered %>%
+  filter(module=="Nouveau"& status_terme_all=="Incomplete")%>% 
+  distinct(id_unik,PriseenCharge_cat_perPreg) %>% 
+  count(PriseenCharge_cat_perPreg) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+
+# # In all modules
+# df_merged_filtered %>%
+#   filter(status_terme_all=="Incomplete")%>% 
+#   distinct(id_unik,PriseenCharge_cat_perPreg) %>% 
+#   count(PriseenCharge_cat_perPreg) %>% 
+#   mutate(somme=sum(n),
+#          proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+#### Frequency of obstetric complications exprienced in new module
+
+-  Number of experienced complications per participant
+  0<1<2+
+```{r}
+df_merged_filtered %>%
+  filter(module=="Nouveau")%>% 
+  distinct(id_unik,total_complications_cat_perID) %>% 
+  count(total_complications_cat_perID) %>% 
+  mutate(somme=sum(n),
+         proportion = paste0(round(n/somme*100,1)," %"))
+```
+
+-  Number of experienced complications per participant
+  0<1<2+
+  
+```{r}
+
+```
+  
+  
+
+
+#### ) nombre d’enfants nés vivants
+Per participant 
+
+```{r}
+df_merged_filtered %>%
+  distinct(id_unik, nb_enfts_vivants_ini_cat) %>%
+  group_by(nb_enfts_vivants_ini_cat) %>%
+  summarise(n = n(),.groups="drop") %>% 
+  mutate(
+    total= sum(n),
+    proportions= round(n/total,3)*100
+  )
+```
+
+
+
+각 수태 방법별 총 임신율 및 만삭 임신율도 계산
+
+```{r}
+# per preg n= 468
+df_merged_filtered %>%
+  filter(module=="Nouveau") %>% 
+  distinct(IdPregnancy, status_terme_all,methode_conception_perPreg_cat_simple) %>% 
+  group_by(methode_conception_perPreg_cat_simple) %>% 
+  summarise(n = n(),.groups="drop") %>% 
+  mutate(
+    total= sum(n),
+    proportions= round(n/total,3)*100
+  )
+```
+
+
+
+
+#### Croisement 
+
+```{r}
+tab <- table(df_merged_filtered$Travail_accouchement_perID,
+      df_merged_filtered$age_regle_cat)
+
+chisq.test(tab, correct = TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#devtools::install_github("ddsjoberg/gtsummary")
+#library(gtsummary)
+
+#--------------------------------------------------------------
+# Per module  (All pregnancies)
+# Total number of live births/Total number of all pregnancies
+#--------------------------------------------------------------
+df_merged_filtered %>%
+  mutate(
+    nb_live_births_old = 
+      ifelse(module == "Ancien", 
+             nb_live_births_all - nb_live_births_onlynew, 
+             NA)
+  ) %>%
+  distinct(
+    id_unik,
+    module,
+    nb_total_gross,
+    nb_total_gross_NewModule,
+    nb_total_gross_OldModule,
+    nb_live_births_all,
+    nb_live_births_onlynew,
+    nb_live_births_old
+  ) %>%  
+  group_by(module) %>%
+  summarise(
+    somme_total_gross = sum(
+      case_when(
+        module == "Nouveau" ~ nb_total_gross_NewModule,
+        module == "Ancien" ~ nb_total_gross_OldModule,
+        TRUE ~ nb_total_gross
+      ), na.rm = TRUE
+    ),
+    somme_liveBirths = sum(
+      case_when(
+        module == "Nouveau" ~ nb_live_births_onlynew,
+        module == "Ancien" ~ nb_live_births_old,
+        TRUE ~ nb_live_births_all
+      ), na.rm = TRUE
+    ),
+    prop = round(somme_liveBirths / somme_total_gross * 100, 2)
+  ) %>%
+  bind_rows(
+    df_merged_filtered %>%
+      distinct(id_unik, nb_total_gross, nb_live_births_all) %>%
+      summarise(
+        somme_total_gross = sum(nb_total_gross, na.rm = TRUE),
+        somme_liveBirths = sum(nb_live_births_all, na.rm = TRUE),
+        prop = round(somme_liveBirths / somme_total_gross * 100, 2)
+      ) %>%
+      mutate(module = "Overall")
+  ) 
+
+# QUESTIONS :  all population VS population who responded to the new module
+# - MAIS THERE ARE patients who responded to two modules 
+
+#------------------------------------------
+#  Per modules (all pregnancies)
+# Incomplete pregnancy rate
+#------------------------------------------
+df_merged_filtered %>%
+  distinct(id_unik, IdPregnancy, module, status_terme_all) %>%
+  select(-IdPregnancy) %>%
+  group_by(module) %>%
+  summarise(
+    total_pregnancies = n(),
+    incomplete_pregnancies = sum(status_terme_all == "Incomplete"),
+    incomplete_rate = incomplete_pregnancies / total_pregnancies * 100
+  ) %>%
+  mutate(incomplete_rate = round(incomplete_rate, 2)) %>%
+  bind_rows(
+    df_merged_filtered %>%
+      distinct(id_unik, IdPregnancy, status_terme_all) %>%
+      select(-IdPregnancy) %>%
+      summarise(
+        total_pregnancies = n(),
+        incomplete_pregnancies = sum(
+          status_terme_all == "Incomplete"),
+        incomplete_rate = 
+          incomplete_pregnancies / total_pregnancies * 100
+      ) %>%
+      mutate(
+        module = "Overall",
+        incomplete_rate = round(incomplete_rate, 2)
+      )
+  ) %>%
+  mutate(module = factor(
+    module, levels = c("Nouveau", "Ancien", "Overall"))) %>%
+  arrange(module, desc(incomplete_rate))
+
+  
+#------------------------------------
+#   gtsummary table	  : per patient 
+#------------------------------------
+# 1. ALL
+tbl_grosse_all <- df_merged_filtered %>%
+  distinct(
+    id_unik,
+  
+    #status_terme_all, # incomplete et terme
+    #type_preg_all,
+    
+    nb_total_gross,
+    #nb_live_births_all,
+    taux_LB_ALL_all,
+    
+    #age_maternal, 
+    first_preg_age, 
+    last_preg_age_mod,
+    
+    Methode_conception_bin_perID,
+    methode_conception_perID_cat_simple,
+    
+    Mode_accouchement_perID, 
+    Travail_accouchement_perID,
+  
+   # nb_nevivants_parpt,
+    
+    allaitement_YN_atleast,
+    
+    #PriseenCharge_bin,
+    PriseenCharge_cat_perID, 
+    
+    Complications_cat_perID,
+    #total_complications,
+    total_complications_bin,
+    total_complications_cat 
+    
+  ) %>%
+  mutate(nb_total_gross = nb_total_gross %>% as.character() %>% as.numeric()) %>%
+  select(-id_unik) %>%
+  tbl_summary(
+    by = NULL,
+    digits =  ~ 1,
+    statistic = list(
+      all_continuous() ~"{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  add_n(
+    statistic = "{N_nonmiss} ({p_nonmiss}%)",
+    col_label = "**Number of non-missing observations**",
+    footnote = FALSE,
+    last = FALSE
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(id_unik) %>% n_distinct()})**") %>%
+  bold_labels()
+
+# 2. Per modules
+tbl_grosse_modules <- df_merged_filtered %>%
+  distinct(
+    id_unik,
+    module,
+    #status_terme_all, # incomplete et terme
+    #type_preg_all,
+    
+    nb_total_gross,
+    #nb_live_births_all,
+    taux_LB_ALL_all,
+    
+    #age_maternal, 
+    first_preg_age, 
+    last_preg_age_mod,
+    
+    Methode_conception_bin_perID,
+    methode_conception_perID_cat_simple,
+    
+    Mode_accouchement_perID, 
+    Travail_accouchement_perID,
+  
+    #nb_nevivants_parpt,
+    
+    allaitement_YN_atleast,
+    
+    PriseenCharge_bin,
+    PriseenCharge_cat_perID, 
+    
+    Complications_cat_perID,
+    #total_complications,
+    total_complications_bin,
+    total_complications_cat 
+    
+  ) %>%
+  mutate(nb_total_gross = nb_total_gross %>% as.character() %>% as.numeric()) %>% 
+  select(-id_unik) %>%
+  tbl_summary(
+    by = module,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(id_unik) %>% n_distinct()})**") %>%
+  bold_labels()
+
+# 3. Merge 
+tbl_grosse_combined <- tbl_merge(
+  tbls = list(tbl_grosse_all, tbl_grosse_modules),
+  tab_spanner = c("**Overall Population**", "**By Module**")
+); tbl_grosse_combined
+
+
+#----------------------------------------
+#   gtsummary table	  : per pregnancy 
+#----------------------------------------
+tbl_grosse_all_perPreg <- df_merged_filtered %>%
+  distinct(
+    IdPregnancy,
+  
+    status_terme_all,
+    type_preg_all,
+    
+    age_maternal, 
+    
+    Methode_conception_bin_perPreg,
+    methode_conception_perPreg_cat, 
+    methode_conception_perPreg_cat_simple,
+    
+    Mode_accouchement,
+
+    Travail_accouchement,
+
+    mois_allaitement,
+
+    PriseenCharge_cat_perPreg,
+    
+    Complications_cat_perPreg
+    ) %>%
+  select(-IdPregnancy) %>%
+  tbl_summary(
+    by = NULL,
+    digits =  ~ 1,
+    statistic = list(
+      all_continuous() ~"{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(IdPregnancy) %>% n_distinct()})**") %>%
+  bold_labels()
+
+tbl_grosse_modules_perPreg <- df_merged_filtered %>%
+  distinct(
+    IdPregnancy,
+    module,
+
+    status_terme_all,
+    type_preg_all,
+    
+    age_maternal, 
+    
+    Methode_conception_bin_perPreg,
+    methode_conception_perPreg_cat, 
+    methode_conception_perPreg_cat_simple,
+    
+    Mode_accouchement,
+
+    Travail_accouchement,
+
+    mois_allaitement,
+
+    PriseenCharge_cat_perPreg,
+    
+    Complications_cat_perPreg
+    ) %>%
+  select(-IdPregnancy) %>%
+  tbl_summary(
+    by = module,
+    digits =  ~ 1,
+    statistic = list(
+      all_continuous() ~"{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+    )
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption("**Characteristics of Patients Related to Pregnancy (n={df_merged_filtered %>% distinct(IdPregnancy) %>% n_distinct()})**") %>%
+  bold_labels()
+
+
+# 3. Merge 
+tbl_grosse_combined_perPreg <- tbl_merge(
+  tbls = list(tbl_grosse_all_perPreg, tbl_grosse_modules_perPreg),
+  tab_spanner = c("**Overall Population**", "**By Module**")
+); tbl_grosse_combined_perPreg
+
+
+#------------------------------------------------------------
+#   LBR per different types of conception method
+#
+# Because one pregnancy can have several conception methods
+#------------------------------------------------------------
+# Question : all modules vs only new module(Reselect the population or just ignore the informations of conception method)
+# - ALL MODULES
+df_merged_filtered %>%
+  distinct(id_unik,
+           nb_total_gross,
+           nb_live_births_all,
+           methode_conception_perID_cat_simple) %>%
+  group_by(methode_conception_perID_cat_simple) %>%
+  summarise(
+    somme_total_gross = sum(nb_total_gross),
+    # total number of pregnancies
+    somme_liveBirths = sum(nb_live_births_all),
+    # total number of Live birth
+    LBR_per_ConceptionMethod = round(somme_liveBirths / somme_total_gross, 2)  # LBR
+  ) %>%
+  mutate(
+    AUTOTAL_Gross = sum(somme_total_gross),
+    AUTOTAL_LB= sum(somme_liveBirths),
+    prop_grossesse_par_methode = round(somme_total_gross / AUTOTAL_Gross, 3),
+    LBR_par_methode= round(somme_liveBirths/AUTOTAL_LB,3)
+  )
+
+# - New module
+df_merged_filtered %>% 
+  filter(module=="New") %>%
+  distinct(id_unik, nb_total_gross_NewModule, nb_live_births_onlynew, methode_conception_perID_cat_simple) %>%
+  group_by(methode_conception_perID_cat_simple) %>% 
+  summarise(
+    somme_total_gross = sum(nb_total_gross),  # total number of pregnancies
+    somme_liveBirths = sum(nb_live_births_all),  # total number of Live birth
+    LBR_per_ConceptionMethod = round(somme_liveBirths / somme_total_gross, 2)  # LBR
+  ) %>% 
+  mutate(
+    AUTOTAL_Gross = sum(somme_total_gross),  
+    prop_grossesse_par_methode = round(somme_total_gross / AUTOTAL_Gross, 3)  
+  )
+
+grossesse_mod2 %>% filter(id_unik=="01D8AB06EB368B00A11F")
+
+```
+TEST
+```{r}
+sansgrossesseencours_final %>%
+  distinct(
+    id_unik,
+    IdPregnancy,
+    status_terme_all,
+    # module,
+    live_birth_bin_atleast_once_all,
+    live_birth_bin_atleast_once_onlynew,
+    # live_birth_bin_all,
+    # live_birth_bin_onlynew,
+    # type_preg_all,
+    # type_preg_onlynew,
+    # nb_live_births_all,
+    # nb_live_births_onlynew,
+    # nb_total_gross,
+    # nb_total_gross_NewModule,
+    # nb_total_gross_OldModule,
+    # taux_LB_ALL_all,
+    # taux_LB_ALL_onlynew,
+    # taux_LB_NEWMODULE,
+    # age_maternal,
+    # first_preg_age,
+    # last_preg_age_mod,
+    # Methode_conception_bin_perID,
+    # Methode_conception_bin_perPreg,
+    # methode_conception_perID_cat,
+    # methode_conception_perID_cat_simple,
+    # methode_conception_perPreg_cat,
+    # methode_conception_perPreg_cat_simple,
+    # Mode_accouchement,
+    # mode_Césarienne,
+    # Mode_accouchement,
+    # Travail_accouchement ,
+    # Travail_accouchement_cat,
+    # allaitement_YN,
+    # PriseEnCharge_bin,
+    # PriseenCharge_long,
+    # total_complications_bin ,
+    # total_complications,
+    # total_complications_cat
+  ) %>%  #Complication_value,
+  select(-id_unik, -IdPregnancy) %>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    label = list()
+  ) %>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption(glue::glue(
+    "**Pregnancies characteristics (n={nrow(df_merged_filtered)})**"
+  )) %>%
+  bold_labels()
+```
+
+
+## Table 2 : Characteristics related to the period and diseases (Endometriosis and Adenomyosis)
+
+```{r}
+# ALL POPULATION
+tbl2_all <-df_merged_filtered%>% 
+  distinct(
+    id_unik,
+    #module,
+    
+    # Règles 
+    age_regles_ini,
+    age_regle_cat,
+    first_rapport,
+    
+    # Endo/Adeno
+    age_symptome, 
+    age_symptome_cat,
+    delai_diag_cat,
+    signe_symptome_premiere_consult,
+    type_endo,
+    family_atcd_EndoAdeno, 
+    family_atcd_doul_pelv,
+    Nb_specialites_consult_cat,
+    stade_dvpt_maladie, 
+    stade_dvpt_legere_severe,
+    motifs_operation1_cat, 
+    motifs_operation2_cat, 
+    indic_ovaire_touche,
+    num_localisation_endo,
+    localisation_final, 
+    taille_kyste_IRM_max,
+    tercile_taille_kyste_IRM,trompe_touche2,
+    nb_operation_endo, 
+    nb_operation_endo_cat
+  )%>%
+  mutate(stade_dvpt_maladie=
+           factor(stade_dvpt_maladie,
+                  levels= c("Non", "Je ne sais pas", 
+                           "Stade I","Stade II",
+                           "Stade III","Stade IV"),
+                  ordered = TRUE))%>%
+  select(-id_unik)%>%
+  tbl_summary(
+    by =NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    label = list()
+  )%>%
+  #add_overall() %>% 
+  modify_header(label = "**Variable**") %>%
+  modify_caption(
+    "**Tableau 2. Endometriosis/Adenomyosis chracteristics (n=1107)**"
+  ) %>%
+  bold_labels()  ; tbl2_all
+
+# TWO DIFFERENTS POPULATIONS by Modules
+tbl2_modules <-df_merged_filtered%>% 
+  distinct(
+    id_unik,
+    module,
+    
+    # Règles 
+    age_regles_ini,
+    age_regle_cat,
+    first_rapport,
+    
+    # Endo/Adeno
+    age_symptome, 
+    age_symptome_cat,
+    delai_diag_cat,
+    signe_symptome_premiere_consult,
+    type_endo,
+    family_atcd_EndoAdeno, 
+    family_atcd_doul_pelv,
+    Nb_specialites_consult_cat,
+    stade_dvpt_maladie, 
+    stade_dvpt_legere_severe,
+    motifs_operation1_cat, 
+    motifs_operation2_cat, 
+    indic_ovaire_touche,
+    num_localisation_endo,
+    localisation_final, 
+    taille_kyste_IRM_max,
+    tercile_taille_kyste_IRM,trompe_touche2,
+    nb_operation_endo, 
+    nb_operation_endo_cat
+  )%>%
+  mutate(stade_dvpt_maladie=
+           factor(stade_dvpt_maladie,
+                  levels= c("Non", "Je ne sais pas", 
+                           "Stade I","Stade II",
+                           "Stade III","Stade IV"),
+                  ordered = TRUE))%>%
+  select(-id_unik)%>%
+  tbl_summary(
+    by =module,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    label = list()
+  )%>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption(
+    "**Tableau 2. Endometriosis/Adenomyosis chracteristics (n=1107)**"
+  ) %>%
+  bold_labels()  ; tbl2_modules
+```
+
+## Table 3 : All types of pain related to diseases 
+
+```{r}
+df_merged_filtered %>% 
+  select(
+    id_unik, 
+    # Dysmenorrhea
+    doul_pelvienne_regle,
+    # Dysurenia
+    doul_rapport_sexuel,
+    douleur_abdo, 
+    douleur_miction,
+    trouble_digestif
+    )%>%
+  distinct()%>%
+  select(-id_unik)%>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    label = list()
+  )%>%
+  modify_header(label = "**Variable**") %>%
+  modify_caption(
+    "**Tableau 3. Pain related to Endometriosis/Adenomyosis (n=1390)**"
+  ) %>%
+  bold_labels()
+
+```
+
+
+# 여기서부터!!!!
+한 환자 당 하나의 값을 갖는 변수들만 골라서 table 만들어야 함. 
+Population : sans grossesses en cours et New/old module 
+- grossesse à terme : Oui/Non 
+- Taux de grossesse à terme 
+
+```{r}
+df_merged_filtered %>% 
+  select(
+    # Grossesse 
+    id_unik, #IdPregnancy,
+    #module,
+    live_birth_bin_atleast_once,
+    #live_birth_bin_all, live_birth_bin_onlynew,
+    #status_terme_all, status_terme_onlynew,
+    #type_preg_all, type_preg_onlynew,
+    nb_live_births_all, nb_live_births_onlynew,
+    nb_incomplete_preg_pt_all, nb_incomplete_preg_pt_onlynew,
+    nb_total_gross,
+    taux_LB_all, taux_LB_onlynew,
+    first_preg_age, last_preg_age_mod,
+    Methode_conception_bin, #starts_with("methode_"),
+    starts_with("mode_"),-Mode_accouchement,
+    starts_with("travail_"),-Travail_accouchement,
+    nb_nevivants_parpt,
+    allaitement_YN, nb_allaitement,
+    PriseEnCharge_bin,starts_with("any_"), #PriseenCharge_long,
+    starts_with("total_complicatioins"),
+    starts_with("complic_"),-Complication_value
+    ) %>% 
+  distinct() %>% 
+  select(-id_unik)%>%
+  tbl_summary(
+    by = NULL,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "ifany",
+    label = list()
+  )%>%
+  #add_overall() %>% 
+  modify_header(label = "**Variable**") %>%
+  modify_caption(
+    "**Tableau 4. Pregnancies information (n=1107)**"
+  ) %>%
+  bold_labels()
+
+```
+
+
+
+
+```{r}
+df_merged_filtered %>% 
+    distinct(id_unik, taux_LB_ALL_all) %>% 
+    select(taux_LB_ALL_all) %>% 
+    ggplot(aes(x = taux_LB_ALL_all)) +
+    geom_histogram(aes(y = ..density..), bins = 30, 
+                   fill = "lightblue", color = "black", 
+                   binwidth = 0.2) +
+    geom_density(color = "red", size = 0.8) +
+    theme_minimal() +
+    labs(
+        title = "Distribution of LBR per patient",
+        x = "LBR per patient",
+        y = "Density"
+    )
+
+df_merged_filtered %>% 
+  distinct(id_unik, taux_LB_ALL_all) %>% 
+  group_by(taux_LB_ALL_all) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(x = taux_LB_ALL_all, y = n)) +
+  geom_bar(stat = "identity", width = 0.15, fill = "lightblue") +
+  geom_smooth(se = FALSE, colour = "red", linewidth = 0.8) +
+  geom_text(aes(label = n), vjust = -0.8, size = 3) + 
+  coord_cartesian(ylim = c(0, 800)) +  # 여기!
+  theme_bw() +
+  labs(
+    title = "Distribution of LBR",
+    y = "Frequency", 
+    x = "LBR per patient"
+  )
+
+```
+
+
+```{r}
+
+```
+

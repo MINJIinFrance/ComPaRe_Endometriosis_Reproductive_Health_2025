@@ -1,0 +1,784 @@
+---
+title: "01_clean_Neuropathic_pain"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Neuropathic_pain
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+doul_neuro <- read.csv(
+  "Complic_pop_QST_0508_20250407_doul_neuro.csv",
+  fileEncoding = "ISO-8859-1"  # similaire to latin1
+)
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+doul_neuro <- doul_neuro%>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim),
+         across(starts_with("Date"),
+                ~ as.Date(.,format="%d/%m/%Y")))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- doul_neuro %>% 
+  sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count == nrow(doul_neuro)) %>%
+  as.vector() # index of columns having only NA
+doul_neuro <- doul_neuro[,-index_col_NA]
+```
+
+# I. Preprocessing Data
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+doul_neuro <- doul_neuro %>% 
+  mutate(doul_neuro_participated = ifelse(is.na(IdAction),
+                                          "Non","Oui"))
+
+#-----------------------------------
+#  Neuropathic pain in binary data
+#-----------------------------------
+doul_neuro <- doul_neuro %>% 
+  mutate(doul_neuro_bin= douleur_mois %>% as.factor())
+
+# Score PainDETECT
+#-------------------
+#  First main pain
+#-------------------
+doul_neuro <- doul_neuro %>%
+  mutate(
+    score1_test =
+      case_when(
+        deroulement_douleur == "Douleur constante avec de légères fluctuations" ~ 0,
+        deroulement_douleur == "Douleur constante ponctuée de pics de douleur" ~ -1,
+        deroulement_douleur %in% c(
+          "Pics de douleur sans douleur de fond",
+          "Fréquents pics de douleur avec douleur de fond"
+        ) ~ 1,
+        deroulement_douleur == "Aucune case ne correspond" ~ 0,
+        TRUE ~ NA_real_
+      ) +
+      if_else(propagation_douleur == "Oui", 2, 0) +
+      case_when(
+        sensation_brulure == "Pas du tout" ~ 0,
+        sensation_brulure == "Très peu" ~ 1,
+        sensation_brulure == "Légèrement" ~ 2,
+        sensation_brulure == "Modérément" ~ 3,
+        sensation_brulure == "Fortement" ~ 4,
+        sensation_brulure == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        picotement == "Pas du tout" ~ 0,
+        picotement == "Très peu" ~ 1,
+        picotement == "Légèrement" ~ 2,
+        picotement == "Modérément" ~ 3,
+        picotement == "Fortement" ~ 4,
+        picotement == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        leger_contact_douloureux == "Pas du tout" ~ 0,
+        leger_contact_douloureux == "Très peu" ~ 1,
+        leger_contact_douloureux == "Légèrement" ~ 2,
+        leger_contact_douloureux == "Modérément" ~ 3,
+        leger_contact_douloureux == "Fortement" ~ 4,
+        leger_contact_douloureux == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        pic_douleur == "Pas du tout" ~ 0,
+        pic_douleur == "Très peu" ~ 1,
+        pic_douleur == "Légèrement" ~ 2,
+        pic_douleur == "Modérément" ~ 3,
+        pic_douleur == "Fortement" ~ 4,
+        pic_douleur == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        temperature_douleur == "Pas du tout" ~ 0,
+        temperature_douleur == "Très peu" ~ 1,
+        temperature_douleur == "Légèrement" ~ 2,
+        temperature_douleur == "Modérément" ~ 3,
+        temperature_douleur == "Fortement" ~ 4,
+        temperature_douleur == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        sensibilite_diminue == "Pas du tout" ~ 0,
+        sensibilite_diminue == "Très peu" ~ 1,
+        sensibilite_diminue == "Légèrement" ~ 2,
+        sensibilite_diminue == "Modérément" ~ 3,
+        sensibilite_diminue == "Fortement" ~ 4,
+        sensibilite_diminue == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        pression_douleur == "Pas du tout" ~ 0,
+        pression_douleur == "Très peu" ~ 1,
+        pression_douleur == "Légèrement" ~ 2,
+        pression_douleur == "Modérément" ~ 3,
+        pression_douleur == "Fortement" ~ 4,
+        pression_douleur == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      )
+  )
+
+#---------------------
+#  Second main pain
+#---------------------
+doul_neuro <- doul_neuro %>%
+  mutate(
+    score2_test =
+      case_when(
+        deroulement_douleur_second == "Douleur constante avec de légères fluctuations" ~ 0,
+        deroulement_douleur_second == "Douleur constante ponctuée de pics de douleur" ~ -1,
+        deroulement_douleur_second %in% c(
+          "Pics de douleur sans douleur de fond",
+          "Fréquents pics de douleur avec douleur de fond"
+        ) ~ 1,
+        deroulement_douleur_second == "Aucune case ne correspond" ~ 0,
+        TRUE ~ NA_real_
+      ) +
+      if_else(precis_deroulement_second == "Oui", 2, 0) +
+      case_when(
+        sensation_brulure_second == "Pas du tout" ~ 0,
+        sensation_brulure_second == "Très peu" ~ 1,
+        sensation_brulure_second == "Légèrement" ~ 2,
+        sensation_brulure_second == "Modérément" ~ 3,
+        sensation_brulure_second == "Fortement" ~ 4,
+        sensation_brulure_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        picotement_second == "Pas du tout" ~ 0,
+        picotement_second == "Très peu" ~ 1,
+        picotement_second == "Légèrement" ~ 2,
+        picotement_second == "Modérément" ~ 3,
+        picotement_second == "Fortement" ~ 4,
+        picotement_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        leger_contact_douloureux_second == "Pas du tout" ~ 0,
+        leger_contact_douloureux_second == "Très peu" ~ 1,
+        leger_contact_douloureux_second == "Légèrement" ~ 2,
+        leger_contact_douloureux_second == "Modérément" ~ 3,
+        leger_contact_douloureux_second == "Fortement" ~ 4,
+        leger_contact_douloureux_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        pic_douleur_second == "Pas du tout" ~ 0,
+        pic_douleur_second == "Très peu" ~ 1,
+        pic_douleur_second == "Légèrement" ~ 2,
+        pic_douleur_second == "Modérément" ~ 3,
+        pic_douleur_second == "Fortement" ~ 4,
+        pic_douleur_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        temperature_douleur_second == "Pas du tout" ~ 0,
+        temperature_douleur_second == "Très peu" ~ 1,
+        temperature_douleur_second == "Légèrement" ~ 2,
+        temperature_douleur_second == "Modérément" ~ 3,
+        temperature_douleur_second == "Fortement" ~ 4,
+        temperature_douleur_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        sensibilite_diminue_second == "Pas du tout" ~ 0,
+        sensibilite_diminue_second == "Très peu" ~ 1,
+        sensibilite_diminue_second == "Légèrement" ~ 2,
+        sensibilite_diminue_second == "Modérément" ~ 3,
+        sensibilite_diminue_second == "Fortement" ~ 4,
+        sensibilite_diminue_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      ) +
+      case_when(
+        pression_douleur_second == "Pas du tout" ~ 0,
+        pression_douleur_second == "Très peu" ~ 1,
+        pression_douleur_second == "Légèrement" ~ 2,
+        pression_douleur_second == "Modérément" ~ 3,
+        pression_douleur_second == "Fortement" ~ 4,
+        pression_douleur_second == "Très fortement" ~ 5,
+        TRUE ~ NA_real_
+      )
+  )
+
+#--------------------------------
+#    PainDetect in categorical
+#--------------------------------
+# 1. Create a categorical variable related to the principal pain score
+doul_neuro$score_paindetect_cat <- ifelse(
+  doul_neuro$score1_test  > 38,
+  "ERREUR",
+  ifelse(
+    doul_neuro$score1_test  > 18,
+    "Positif",
+    ifelse(
+      doul_neuro$score1_test  > 12,
+      "Incertain",
+      ifelse(
+        doul_neuro$score1_test  >= -1,
+        "Négatif",
+        ifelse(doul_neuro$score1_test  < -1, "ERREUR", NA)
+      )
+    )
+  )
+) %>% as.factor()
+
+# 2. Delete unnecessary variables 
+doul_neuro <- doul_neuro %>%
+  dplyr::select(
+    -c(
+      deroulement_douleur,
+      picotement,
+      leger_contact_douloureux,
+      pic_douleur,
+      temperature_douleur,
+      sensibilite_diminue,
+      pression_douleur,
+      deroulement_douleur_second,
+      picotement_second,
+      leger_contact_douloureux_second,
+      pic_douleur_second,
+      temperature_douleur_second,
+      sensibilite_diminue_second,
+      pression_douleur_second
+    )
+  )
+
+#-------------------------
+# Recode main pain area
+#------------------------
+# 1. Extraction of the area number: 
+# for example, “21 - fosse iliaque droite (ovaire, trompe)” will be #converted to “21”
+recode_var <- function(var) {
+  recoded_var <- as.numeric(sub(".*?(\\d+).*", "\\1", var))
+  return(recoded_var)
+}
+
+for (i in 1:53) {
+  for (suffix in c("principale", "second")) {
+    var_name <- paste0("zone_douleur_", suffix, "_", i)
+    recoded_var_name <- paste0("recoded_zone_douleur_", suffix, "_", i)
+    
+    if (var_name %in% names(doul_neuro)) {
+      doul_neuro[[recoded_var_name]] <- recode_var(doul_neuro[[var_name]])
+    } else {
+      warning(paste("Variable", var_name, "does not exist in doul_neuro"))
+    }
+  }
+}
+
+# 2. Deletes the old names
+doul_neuro <- doul_neuro[, !names(doul_neuro) %in%
+                           c(paste0("zone_douleur_principale_",
+                                    1:53),
+                             paste0("zone_douleur_second_", 
+                                    1:53))]
+
+# 3. Recode numbers into specific names
+recode_body_area <- function(df, pattern) {
+  body_map <- c(
+    "1" = "Coté droit face",  "3" = "Coté droit face",  "34" = "Coté droit face",
+    "2" = "Coté gauche face", "4" = "Coté gauche face", "33" = "Coté gauche face",
+    "5" = "Cou", "35" = "Cou",
+    "6" = "Epaule droite", "37" = "Epaule droite",
+    "7" = "Epaule gauche", "36" = "Epaule gauche",
+    "8" = "Poitrine", "9" = "Poitrine",
+    "10" = "Bras droit", "40" = "Bras droit",
+    "11" = "Bras gauche", "41" = "Bras gauche",
+    "12" = "Abdomen", "13" = "Abdomen", "14" = "Abdomen", "15" = "Abdomen", "16" = "Abdomen",
+    "17" = "Avant bras droit", "22" = "Avant bras droit", "45" = "Avant bras droit",
+    "18" = "Avant bras gauche", "23" = "Avant bras gauche", "44" = "Avant bras gauche",
+    "19" = "Zone pelvienne", "20" = "Zone pelvienne", "21" = "Zone pelvienne",
+    "24" = "Haut jambe droite", "49" = "Haut jambe droite",
+    "25" = "Haut jambe gauche", "48" = "Haut jambe gauche",
+    "26" = "Bas jambe droite", "28" = "Bas jambe droite", "30" = "Bas jambe droite", "51" = "Bas jambe droite", "53" = "Bas jambe droite",
+    "27" = "Bas jambe gauche", "29" = "Bas jambe gauche", "31" = "Bas jambe gauche", "50" = "Bas jambe gauche", "52" = "Bas jambe gauche",
+    "32" = "Partie post tête",
+    "38" = "Lombaire", "39" = "Lombaire",
+    "43" = "Fessier droit", "46" = "Fessier droit",
+    "42" = "Fessier gauche", "47" = "Fessier gauche"
+  )
+
+  cols_to_recode <- grep(pattern, names(df), value = TRUE)
+  for (col in cols_to_recode) {
+    df[[col]] <- as.factor(ifelse(
+      as.character(df[[col]]) %in% names(body_map),
+      body_map[as.character(df[[col]])],
+      as.character(df[[col]])
+    ))
+  }
+  return(df)
+}
+
+# 4. Recode body areas according previously to the areas already used in the literature 
+recode_body_area2 <- function(df, pattern) {
+  body_map <- c(
+    "1" = "Coté droit face",  "3" = "Coté droit face",  "34" = "Coté droit face",
+    "2" = "Coté gauche face", "4" = "Coté gauche face", "33" = "Coté gauche face",
+    "5" = "Cou", "35" = "Cou",
+    "6" = "Epaule droite", "37" = "Epaule droite",
+    "7" = "Epaule gauche", "36" = "Epaule gauche",
+    "8" = "Poitrine", "9" = "Poitrine",
+    "10" = "Bras droit", "40" = "Bras droit",
+    "11" = "Bras gauche", "41" = "Bras gauche",
+    "12" = "Abdomen", "13" = "Abdomen", "14" = "Abdomen", "15" = "Abdomen", "16" = "Abdomen",
+    "17" = "Avant bras droit", "22" = "Avant bras droit", "45" = "Avant bras droit",
+    "18" = "Avant bras gauche", "23" = "Avant bras gauche", "44" = "Avant bras gauche",
+    "19" = "Zone pelvienne", "20" = "Zone pelvienne", "21" = "Zone pelvienne",
+    "24" = "Haut jambe droite", "49" = "Haut jambe droite",
+    "25" = "Haut jambe gauche", "48" = "Haut jambe gauche",
+    "26" = "Bas jambe droite", "28" = "Bas jambe droite", "30" = "Bas jambe droite", "51" = "Bas jambe droite", "53" = "Bas jambe droite",
+    "27" = "Bas jambe gauche", "29" = "Bas jambe gauche", "31" = "Bas jambe gauche", "50" = "Bas jambe gauche", "52" = "Bas jambe gauche",
+    "32" = "Partie post tête",
+    "38" = "Lombaire", "39" = "Lombaire",
+    "43" = "Fessier droit", "46" = "Fessier droit",
+    "42" = "Fessier gauche", "47" = "Fessier gauche"
+  )
+
+  cols_to_recode <- grep(pattern, names(df), value = TRUE)
+  for (col in cols_to_recode) {
+    df[[col]] <- as.factor(ifelse(
+      as.character(df[[col]]) %in% names(body_map),
+      body_map[as.character(df[[col]])],
+      as.character(df[[col]])
+    ))
+  }
+  return(df)
+}
+
+# 5. Apply factor recoding
+doul_neuro <- recode_body_area(doul_neuro,"recoded_zone_douleur_principale_test")
+doul_neuro <- recode_body_area2(doul_neuro,"recoded_zone_douleur_second_")
+
+#----------------------------------------
+#  Create lists of index for these area
+#----------------------------------------
+# 1. Create a temporary dataframe
+new_dataframe <- doul_neuro %>% 
+  dplyr::select(id_unik,starts_with(c("recoded_zone_douleur_principale_","recoded_zone_douleur_second_"))) 
+
+# 2. Make lists of index                
+body_parts <- c("Tête",
+                "Epaule et cou",
+                "Torse",
+                "Bras",
+                "Ventre",
+                "Bassin",
+                "Jambes",
+                "Dos")
+
+column_names <- c(
+  "indic_doul_tete",
+  "indic_doul_epaule",
+  "indic_doul_torse",
+  "indic_doul_bras",
+  "indic_doul_ventre",
+  "indic_doul_bassin",
+  "indic_doul_jambe",
+  "indic_doul_dos"
+)
+body_parts2 <- c(
+  "Coté droit face",
+  "Coté gauche face",
+  "Cou",
+  "Epaule droite",
+  "Epaule gauche",
+  "Poitrine",
+  "Bras droit",
+  "Bras gauche",
+  "Abdomen",
+  "Avant bras droit",
+  "Avant bras gauche",
+  "Zone pelvienne",
+  "Haut jambe droite",
+  "Haut jambe gauche",
+  "Bas jambe droite",
+  "Bas jambe gauche",
+  "Partie post tête",
+  "Lombaire",
+  "Fessier droit",
+  "Fessier gauche"
+)
+
+column_names2 <- c(
+  "indic_doul_cote_droit_face",
+  "indic_doul_cote_gauche_face",
+  "indic_doul_cou",
+  "indic_doul_epaule_droite",
+  "indic_doul_epaule_gauche",
+  "indic_doul_poitrine",
+  "indic_doul_bras_droit",
+  "indic_doul_bras_gauche",
+  "indic_doul_abdomen",
+  "indic_doul_avant_bras_droit",
+  "indic_doul_avant_bras_gauche",
+  "indic_doul_zone_pelvienne",
+  "indic_doul_haut_jambe_droite",
+  "indic_doul_haut_jambe_gauche",
+  "indic_doul_bas_jambe_droite",
+  "indic_doul_bas_jambe_gauche",
+  "indic_doul_partie_post_tete",
+  "indic_doul_lombaire",
+  "indic_doul_fessier_droit",
+  "indic_doul_fessier_gauche"
+)
+
+# 3. Look through each body part and create the corresponding indicator variable
+for (i in seq_along(body_parts2)) {
+  part <- body_parts2[i]
+  col_name <- column_names2[i]
+  
+  new_dataframe[[col_name]] <- as.factor(apply(new_dataframe, 1, function(row) {
+    ifelse(part %in% row, 1, 0)
+    }))
+  }
+
+# 4. Add the new variables to the dataframe
+doul_neuro <- doul_neuro %>%
+  left_join(
+    new_dataframe %>%
+      dplyr::select(
+        -starts_with("recoded_zone_douleur_")
+        ),
+    by = "id_unik"
+  )
+
+# 5. Delete the old ones and the temporary dataframe
+doul_neuro <- doul_neuro %>% 
+  dplyr::select(-starts_with(c("recoded_zone_douleur_principale_",
+                              "recoded_zone_douleur_second_" )))
+rm(new_dataframe)
+
+#----------------------
+# Recode immediate pain 
+#-----------------------
+# 1. character to numeric
+doul_neuro$douleur_instant <-  as.numeric(as.character(doul_neuro$douleur_instant))
+
+# 2. quantiles data
+quantiles <- quantile(doul_neuro$douleur_instant, probs = c(1/3, 2/3),na.rm=TRUE)
+
+# 3. Create new categorical variable
+doul_neuro <- doul_neuro %>%
+  mutate(
+    tercile_douleur_instant = ntile(douleur_instant, 3),
+    tercile_douleur_instant = factor(
+      tercile_douleur_instant,
+      levels = 1:3,
+      labels = c(
+        paste0("<", round(quantiles[1], 2)),
+        paste0(round(quantiles[1], 2), "-", round(quantiles[2], 2)),
+        paste0(">", round(quantiles[2], 2))
+      )
+    )
+  ) %>%
+  # 4. Remove unnecessay variables 
+  dplyr::select(-precision_douleur, -douleur_instant)
+
+#----------------------
+#  Recode strong pain 
+#----------------------
+# 1. character to numeric
+doul_neuro$forte_douleur <-  as.numeric(as.character(doul_neuro$forte_douleur))
+
+# 2. quantiles data
+quantiles <- quantile(doul_neuro$forte_douleur , probs = c(1/3, 2/3),na.rm=TRUE)
+
+# 3. Create new categorical variable
+doul_neuro <- doul_neuro %>%
+  mutate(
+    tercile_forte_douleur = ntile(forte_douleur, 3),
+    tercile_forte_douleur = factor(
+      tercile_forte_douleur,
+      levels = 1:3,
+      labels = c(
+        paste0("<", round(quantiles[1], 2)),
+        paste0(round(quantiles[1], 2), "-", round(quantiles[2], 2)),
+        paste0(">", round(quantiles[2], 2))
+      )
+    )
+  ) %>%
+  # 4. Remove unnecessay variables 
+  dplyr::select(-forte_douleur)
+
+#------------------------
+# Recode pain intensity 
+#------------------------
+# 1. character to numeric
+doul_neuro$intensite_moyenne <- 
+  as.numeric(as.character(doul_neuro$intensite_moyenne))
+
+# 2. quantiles data
+quantiles <- quantile(doul_neuro$intensite_moyenne , probs = c(1/3, 2/3),na.rm=TRUE)
+
+# 3. Create new categorical variable
+doul_neuro <- doul_neuro %>%
+  mutate(
+    tercile_intensite_moyenne = ntile(intensite_moyenne, 3),
+    tercile_intensite_moyenne = factor(
+      tercile_intensite_moyenne,
+      levels = 1:3,
+      labels = c(
+        paste0("<", round(quantiles[1], 2)),
+        paste0(round(quantiles[1], 2), "-", round(quantiles[2], 2)),
+        paste0(">", round(quantiles[2], 2))
+        )
+      )
+    ) %>%
+  dplyr::select(-intensite_moyenne)
+      
+#------------------------------------
+# whether the women experienced a propagation of pain for at least one of their two main pain points
+#------------------------------------
+#- Be careful: when you execute as.numeric(doul_neuro$propagation_douleur), 'Oui' should correspond to the higher number. If it does not, reverse the levels in the labels.
+doul_neuro$propagation_douleur3 <- factor(
+  pmax(
+    as.numeric(as.factor(doul_neuro$propagation_douleur)),
+    as.numeric(as.factor(doul_neuro$propagation_douleur_second)),
+    na.rm = TRUE
+  ),
+  levels = c(1, 2),
+  labels = c("Non", "Oui"),
+  ordered = TRUE
+)
+
+#---------------------------------
+# 20 zones previously used
+#---------------------------------
+# Here, we create a variable for the propagation of pain that, instead of indicating the 53 zones of origin, uses the 20 zones previously used
+for (i in 1:53) {
+  for (suffix in c("douleur", "douleur_second")) {
+    var_name <- paste0("direct_propa_", suffix, "_", i)
+    recoded_var_name <- paste0("recoded_direct_propa_", suffix, "_", i)
+    
+    if (var_name %in% names(doul_neuro)) {
+      doul_neuro[[recoded_var_name]] <- recode_var(doul_neuro[[var_name]])
+    } else {
+      warning(paste("Variable", var_name, "does not exist in doul_neuro"))
+    }
+  }
+}
+
+# 2. Create index for each area 
+doul_neuro <- doul_neuro %>% 
+  dplyr::select(-starts_with(c("direct_propa_douleur_","direct_propa_douleur_second_")))
+# 3. Apply the created function to the all variables started with "recoded_direct_propa_douleur_"     
+doul_neuro <- recode_body_area(doul_neuro, "recoded_direct_propa_douleur_")
+doul_neuro <- recode_body_area2(doul_neuro, "recoded_direct_propa_douleur_second_")
+
+# 4. Create a temporary dataframe
+new_dataframe <- doul_neuro %>% 
+  dplyr::select(id_unik, 
+                starts_with("recoded_direct_propa_douleur_"), 
+                propagation_douleur3)
+
+# 5. List of body parts and corresponding column names
+body_parts <- c("Tête",
+                "Epaule et cou",
+                "Torse",
+                "Bras",
+                "Ventre",
+                "Bassin",
+                "Jambes",
+                "Dos")
+body_parts2 <- c(
+  "Coté droit face",
+  "Coté gauche face",
+  "Cou",
+  "Epaule droite",
+  "Epaule gauche",
+  "Poitrine",
+  "Bras droit",
+  "Bras gauche",
+  "Abdomen",
+  "Avant bras droit",
+  "Avant bras gauche",
+  "Zone pelvienne",
+  "Haut jambe droite",
+  "Haut jambe gauche",
+  "Bas jambe droite",
+  "Bas jambe gauche",
+  "Partie post tête",
+  "Lombaire",
+  "Fessier droit",
+  "Fessier gauche"
+)
+column_names <- c(
+  "indic_prop_doul_tete",
+  "indic_prop_doul_epaule",
+  "indic_prop_doul_torse",
+  "indic_prop_doul_bras",
+  "indic_prop_doul_ventre",
+  "indic_prop_doul_bassin",
+  "indic_prop_doul_jambe",
+  "indic_prop_doul_dos"
+)
+column_names2 <- c(
+  "indic_prop_doul_cote_droit_face",
+  "indic_prop_doul_cote_gauche_face",
+  "indic_prop_doul_cou",
+  "indic_prop_doul_epaule_droite",
+  "indic_prop_doul_epaule_gauche",
+  "indic_prop_doul_poitrine",
+  "indic_prop_doul_bras_droit",
+  "indic_prop_doul_bras_gauche",
+  "indic_prop_doul_abdomen",
+  "indic_prop_doul_avant_bras_droit",
+  "indic_prop_doul_avant_bras_gauche",
+  "indic_prop_doul_zone_pelvienne",
+  "indic_prop_doul_haut_jambe_droite",
+  "indic_prop_doul_haut_jambe_gauche",
+  "indic_prop_doul_bas_jambe_droite",
+  "indic_prop_doul_bas_jambe_gauche",
+  "indic_prop_doul_partie_post_tete",
+  "indic_prop_doul_lombaire",
+  "indic_prop_doul_fessier_droit",
+  "indic_prop_doul_fessier_gauche"
+)
+
+# 6. Indicate whether or not there is propagation in this body part
+for (i in seq_along(body_parts2)) {
+  part <- body_parts2[i]
+  col_name <- column_names2[i]
+  
+  new_dataframe[[col_name]] <- as.factor(apply(new_dataframe, 1, function(row) {
+    ifelse(part %in% row, "Propagation dans cette région", "Pas de propagation dans cette région")
+  }))
+}
+
+# 7. Indicate if the women had any propagation of pain
+modifier_prop_doul <- function(df, target_var, condition_var) {
+  if (!(target_var %in% colnames(df)) || !(condition_var %in% colnames(df))) {
+    stop("Les variables spécifiées n'existent pas dans le dataframe.")
+  }
+  df[[target_var]] <- as.factor(ifelse(df[[condition_var]] == "Non", "Aucune propagation",as.character( df[[target_var]])))
+  return(df)
+}
+
+# 8. Apply the function to each column specified in column_names
+for (target_var in column_names2) {
+  new_dataframe <- modifier_prop_doul(new_dataframe, target_var,
+                                      "propagation_douleur3")
+}
+
+# 9. Replace the new variable in the dataframe
+doul_neuro <-doul_neuro %>% 
+  left_join(
+    new_dataframe %>% dplyr::select(-starts_with("recoded_direct_propa_douleur"),
+                             -propagation_douleur3),
+    by="id_unik"
+  )
+  
+# 10. Delete unnecessay variables and the temporary dataframe 
+doul_neuro <- doul_neuro %>% 
+  dplyr::select(-starts_with(c("recoded_direct_propa_douleur_")))
+rm(new_dataframe)
+```
+
+# II. Final dataset
+
+## 1) Variable selection 
+
+```{r}
+doul_neuro_final <- doul_neuro %>%
+  distinct(
+    id_unik,
+    #IdVersion,
+    doul_neuro_bin,
+    score_paindetect_cat,
+    doul_neuro_participated
+    # DateValidation,
+    # Date_naissance
+  ) %>% 
+  mutate(
+    # Add new modality 'Not_answered'
+    across(c(doul_neuro_bin, score_paindetect_cat),
+           ~ case_when(is.na(IdVersion) ~ "Not_answered",
+                       TRUE ~ .)
+           ),
+    across(starts_with("Date"),
+           ~ as.Date(., format = "%d/%m/%Y")
+           ),
+    
+    score_paindetect_cat =
+      case_when(doul_neuro_bin == "Non" ~ "No pain", 
+                TRUE ~ score_paindetect_cat)
+    ) #%>% 
+  #select(-IdVersion)
+```
+
+## 2) Real Final Dataframe
+Question (Marina) : pas de tranch d'âge  : impossible de créer une variable avant de la 1ère grossesse 
+
+```{r}
+# new_dataframe <- doul_neuro_final %>%
+#   left_join(grossesse_mod_final %>%
+#               distinct(id_unik, first_preg_age,last_preg_age_mod,
+#                        grossesse_encours),
+#             by = "id_unik") %>% 
+#   mutate(
+#     last_preg_age_mod= last_preg_age_mod %>% round()
+#   )
+#   
+#   
+# # 2. Create a binary variable 
+# new_dataframe <- new_dataframe %>% 
+#   mutate(
+#     first_preg_age= first_preg_age %>% round(),
+#     age_inclusion = as.numeric(as.character(
+#       (DateValidation-Date_naissance)/365)) %>% round()
+#     )  %>% 
+#   select(- DateValidation, -Date_naissance)
+```
+
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(doul_neuro_final,"doul_neuro_final.csv")
+```
+

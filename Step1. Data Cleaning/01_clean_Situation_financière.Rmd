@@ -1,0 +1,111 @@
+---
+title: "01_clean_Situation_financière"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Situation_financière
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+situation_finan <- read.csv(
+  "Complic_pop_QST_0315_20250407_situation_financiere.csv",
+  fileEncoding = "latin1",
+  colClasses = c(Sexe = "character")
+)
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+situation_finan <- situation_finan %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim))
+```
+
+# I. Preprocessing Data
+
+```{r}
+situation_finan <- situation_finan %>%
+  mutate(
+    situation_financiere =
+      situation_financiere %>%
+      factor(
+        levels = c(
+          "Je suis obligé(e) de m'endetter pour m'en sortir",
+          "C'est difficile",
+          "Un peu juste, je dois faire attention à mes finances",
+          "A l'équilibre",
+          "Plûtot à l'aise",
+          "Très à l'aise"
+        ),
+        labels = c(
+          "In debt",
+          "Difficult",
+          "A little tight",
+          "Balanced",
+          "Comfortable",
+          "Very comfortable"
+        )
+      ),
+    
+    situation_financiere = 
+      case_when(
+        situation_financiere %in% c("In debt", "Difficult") ~
+          "Difficult/In debt",
+        situation_financiere %in% c("A little tight","Balanced") ~
+          "Balanced",
+        situation_financiere %in% c("Comfortable", "Very comfortable") ~
+          "Comfortable/Very comfortable"
+      ) %>% 
+      factor(ordered = FALSE),
+
+    # Particpation : Yes or No
+    situation_financiere_participated =
+      ifelse(is.na(situation_financiere), "Non", "Oui")
+  )
+```
+
+# II. Final dataframe
+
+```{r}
+situation_finan_final <- situation_finan
+```
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(situation_finan_final,"situation_finan_final.csv")
+```
+

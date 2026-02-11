@@ -1,0 +1,850 @@
+---
+title: "04_O2_Statistical_Analysis"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : **2 Objective**, Statistical Analysis
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Statistical Analysis
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(purrr) # reduce()
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gt)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+library(chromote)
+library(car)
+library(mediation)
+library(shiny)
+library(shinydashboard)
+library(data.table)
+library(DT)
+library(mice)
+library(dagitty)
+library(ggdag)
+library(gridExtra)
+library(grid)
+library(dotwhisker)
+library(pROC)
+library(pscl)
+library(ResourceSelection)
+library(car)
+library(writexl)
+```
+
+# 0. Import the imputed data 
+
+```{r}
+imputed_data_O2 <- read.csv("imputed_data_O2_V2.csv") %>%
+  dplyr::select(-X, -ends_with("_participated"),
+                -OMA, -SPE, -ADENO,
+                -comorbidite_bin,
+                -delai_diag_cat
+                )
+
+#----------------------
+#  Imputed Dataframe
+#----------------------
+imputed_data_O2 <- imputed_data_O2 %>%
+  mutate(across(where(is.character), as.factor))%>%
+  mutate(
+    live_birth_bin_atleast_once_all = factor(live_birth_bin_atleast_once_all, 
+                                             levels = c("Non", "Oui")),
+    
+    diplome_ini2 = factor(
+      diplome_ini2,
+      levels = c("<=Baccalauréat/Aucun/Autre", "Bac+2", ">=Bac+3"),
+      ordered = FALSE
+    ),
+    
+    situation_financiere   = factor(
+      situation_financiere,
+      levels = c(
+        "Balanced",
+        "Difficult/In debt",
+        "Comfortable/Very comfortable"
+      ),
+      ordered = FALSE
+    ),
+    
+    
+    endo_ade_categorie = factor(
+      endo_ade_categorie,
+      levels = c("Only endometriosis", "Only adenomyosis", "Both")
+    ),
+    
+    type_endo =
+      factor(
+        type_endo,
+        levels = c(
+          "DIE only",
+          "SPE only",
+          "OMA only",
+          "ADENO only",
+          "Multiple types",
+          "Aucun mentionné/nsp"
+        )
+      ),
+    
+    first_preg_age_cat = factor(
+      first_preg_age_cat,
+      levels = c("<30", "30-34", ">=34"),
+      ordered = FALSE
+    ),
+    
+    age_symptome_cat = factor(
+      age_symptome_cat,
+      levels = c(
+        "<= 13",
+        "(13;15]",
+        "(15;22]",
+        "22+",
+        "No symptoms"
+      ),
+      ordered = FALSE
+    ))
+```
+
+
+# I. Univariable analysis adjusted for age 
+## 1. Results Table 
+
+```{r}
+#---------------
+# Configuration
+#---------------
+# 1. Define your outcome and adjustment variables 
+outcome_variable <- "live_birth_bin_atleast_once_all"
+adjustment_variable <- "age"
+
+#-----------------------------
+#  Data Preparation & Checks
+#-----------------------------
+# Ensure outcome variable is suitable for logistic regression (factor or 0/1 numeric)
+if (!is.factor(imputed_data_O2[[outcome_variable]]) && !all(imputed_data_O2[[outcome_variable]] %in% c(0, 1, NA))) {
+  stop(paste("Outcome variable '", outcome_variable, "' must be a factor or numeric with values 0/1."))
+  }
+
+# Convert outcome to factor if it's 0/1 numeric, as tbl_summary needs factor for 'by'
+if (is.numeric(imputed_data_O2[[outcome_variable]])) {
+    imputed_data_O2 <- imputed_data_O2 %>%
+        mutate(!!sym(outcome_variable) := factor(!!sym(outcome_variable)))
+    print(paste("INFO: Converted numeric outcome variable '",
+                outcome_variable, "' to factor."))
+    }
+
+# Ensure adjustment variable exists
+if (!all(adjustment_variable %in% names(imputed_data_O2))) {
+  stop(paste("Some adjustment variables not found in the dataframe:", 
+             paste(setdiff(adjustment_variable, names(imputed_data_O2)), collapse = ", ")))
+}
+# if (!adjustment_variable %in% names(imputed_data_O2)) {
+#   stop(paste("Adjustment variable '", adjustment_variable, "' not found in the dataframe."))
+#   }
+
+missing_vars <- setdiff(adjustment_variable, names(imputed_data_O2))
+if (length(missing_vars) > 0) {
+  stop(paste("Adjustment variable(s) not found in the dataframe:", paste(missing_vars, collapse = ", ")))
+  }
+
+# Identify predictor variables (excluding outcome and adjustment variable)
+predictor_variables <- setdiff(names(imputed_data_O2), 
+                               c(outcome_variable, adjustment_variable))
+
+if (length(predictor_variables) == 0) {
+    stop("No predictor variables found after excluding outcome and adjustment variables.")
+  }
+
+print(paste("Outcome:", outcome_variable))
+print(paste("Adjustment:", paste(adjustment_variable, collapse=", ")))
+print(paste("Predictors:", paste(predictor_variables, collapse=", ")))
+
+
+#-----------------------------------------------------------------
+# 1. Create Descriptive Statistics Table (Stratified by Outcome)
+#-----------------------------------------------------------------
+# This table shows N(%) or Mean (SD) for each predictor within each outcome group
+tbl_descriptive <- imputed_data_O2 %>%
+  dplyr::select(all_of(outcome_variable), all_of(predictor_variables)) %>% 
+  tbl_summary(
+    by = all_of(outcome_variable),           # Stratify by the outcome
+    statistic = list(                         # Define stats for variable types
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no",                           
+    digits = list(all_continuous() ~ 1, 
+                  all_categorical() ~ c(0, 1)) # Control digits
+  ) %>%
+  # add_p() %>%     # Optional: Add p-value for difference between groups
+  modify_header(label ~ "**Characteristic**") %>% 
+  # Remove the overall column if you only want stratified stats (optional)
+  # remove_overall() %>%
+  bold_labels()
+
+print("Step 1: Descriptive Statistics Table Created.")
+# tbl_descriptive # Uncomment to view intermediate table
+
+#-------------------------------------------------------------
+# 2. Create Adjusted Multivariate Logistic Regression Table
+#-------------------------------------------------------------
+# This function fits glm(outcome ~ predictor + ajusted variables ) and returns a gtsummary table row
+fit_adjusted_glm <- function(predictor, outcome_var, adjust_var, data) {
+  # Use backticks for safety with non-standard names
+  adjust_str <- paste(sprintf("`%s`", adjustment_variable), collapse = " + ")
+    # adjust_vars는 벡터
+  formula_str <- paste0("`", outcome_var, "` ~ `", predictor, "` + ", adjust_str)
+  
+  # Fit the model
+  model <- tryCatch(
+    glm(as.formula(formula_str), data = data, family = binomial(link = "logit")),
+    error = function(e) {
+      warning(paste("Could not fit model for predictor:", predictor, "- Error:", conditionMessage(e)), call. = FALSE)
+      return(NULL) # Return NULL if model fails
+    }
+  )
+  
+  # If model failed, return NULL
+  if (is.null(model)) return(NULL)
+  
+  # Create a regression table, keeping only the row(s) for the main predictor
+  tbl_regression(model, exponentiate = TRUE, conf.int=TRUE) %>%
+    # Keep rows where 'variable' matches the predictor name
+    # This correctly handles factor variables which have multiple rows
+    modify_table_body(~ dplyr::filter(.x, variable == predictor)) 
+  }
+
+# Apply the function to each predictor variable
+list_of_adj_tables <- map(predictor_variables,
+                          ~fit_adjusted_glm(.x, outcome_variable,
+                                            adjustment_variable,
+                                            imputed_data_O2))
+
+# Remove any NULL results (from failed models)
+list_of_adj_tables <- list_of_adj_tables[!sapply(list_of_adj_tables,
+                                                 is.null)]
+
+# Stack the individual predictor tables into one
+if (length(list_of_adj_tables) > 0) {
+  tbl_adjusted_ors <- tbl_stack(list_of_adj_tables, 
+                                group_header = NULL) %>%
+    modify_table_body(
+      ~ .x %>%
+        mutate(
+          est_ci = if_else(
+            !is.na(estimate),
+            sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+            NA_character_
+            )
+          )
+      ) %>%
+    modify_header(
+      label ~"**Characteristic**",
+      est_ci ~"**Adjusted OR (95% CI)**"
+    )
+  print("Step 2: Adjusted Odds Ratios Table Created.")
+} else {
+  warning("No successful models were fitted for adjusted ORs.", 
+          call. = FALSE)
+  tbl_adjusted_ors <- NULL
+}
+
+#----------------------------------------------
+# 3. Merge Descriptive and Adjusted OR Tables
+#----------------------------------------------
+adjust_str <- paste(adjustment_variable, collapse = " + ")
+
+if (!is.null(tbl_adjusted_ors)) {
+    # Merge the two tables. gtsummary aligns rows based on the 'label' column.
+    tbl_final <- tbl_merge(
+      tbls = list(tbl_descriptive, tbl_adjusted_ors),
+      # Add spanners to differentiate the table sections
+      tab_spanner = c("**Descriptive Statistics by Outcome**",
+                      "**Age-Adjusted Model**")
+    ) %>%
+      modify_caption(
+        paste0(
+          "**Multivariate Logistic Regression Analysis for '",
+          outcome_variable, 
+          "' (Adjusted for '", adjust_str, "')**"))
+
+    print("Step 3: Merged Table Created.")
+    
+    # --- Display the final table ---
+    tbl_final
+    } else {
+    print("Final merged table could not be created as the adjusted OR table is empty.")
+    print("Displaying only the descriptive statistics table:")
+    tbl_descriptive %>%
+        modify_caption(
+          paste0(
+            "**Descriptive Statistics for Predictors of '", 
+            outcome_variable,"'**"))
+    }
+#tbl_final
+
+#------------------------------------------------------------
+# MERGED TABLE as tibble for the facility of coping results 
+#------------------------------------------------------------
+table_res2_final <- as_tibble(tbl_final) %>% 
+  dplyr::select(1,2,3,7,6) 
+
+table_res2_final %>% View
+
+write_xlsx(table_res2_final, "Table_O2_univariable_adjusted_final.xlsx")
+```
+
+## 2. Preselection of variables with p-value < 0.2
+[1] "statut_marital_ini_cat"     "situation_financiere"      
+[3] "endo_ade_categorie"         "age_symptome_cat"          
+[5] "complication_operation_mod" "first_preg_age_cat" 
+
+```{r}
+ls_var_uni_results <- tbl_final$table_body %>% 
+  filter(p.value_2<=0.2) %>%
+  distinct(variable) %>% pull()
+ls_var_uni_results
+```
+
+
+
+3. P-trend table 
+ordinal variables -> as.numeric :  p-trend ? 
+- if the modality "Not_answered" exists,"Not_answered" to NA and then check the p trend 
+
+Question : Differences between results : 
+- ordinal variable to numeric variable VS glm(outcome ~ ordinal exposure variable + age, data, family=binomial) 
+- .L : linear tendance 
+
+```{r}
+# imputed_data_O2_2 <- imputed_data_O2 %>%
+#   mutate(
+#     diplome_ini2 = factor(
+#       diplome_ini2,
+#       levels= c("<=Baccalauréat/Aucun/Autre", "Bac+2", ">=Bac+3"),
+#       ordered = TRUE
+#     ) %>% 
+#       as.numeric(),
+#     
+#     situation_financiere = factor(
+#       situation_financiere,
+#       levels = c(
+#         "Difficult/In debt",
+#         "Balanced",
+#         "Comfortable/Very comfortable"
+#         ),
+#       ordered = TRUE
+#     ) %>% 
+#       as.numeric(),
+#     
+#     first_preg_age_cat = factor(
+#       first_preg_age_cat, 
+#       levels= c("<30","30-34",">=34"), 
+#       ordered = TRUE) %>% 
+#       as.numeric(),
+#     
+#   age_symptome_cat = factor(
+#     age_symptome_cat,
+#     levels = c("No symptoms", "<= 13", "(13;15]", "(15;22]", "22+"),
+#     ordered = FALSE
+#     )%>%
+#     as.numeric(),
+# 
+#   age_firstOP_endoadeno_cat = factor(
+#     age_firstOP_endoadeno_cat,
+#     levels = c("No operation","<27", "27-31", "31>="),
+#     ordered = TRUE
+#     )%>%
+#     as.numeric(),
+#   
+#   nb_mal_sansEndoAde_cat= factor(
+#     nb_mal_sansEndoAde_cat,
+#     levels= c("0","1","2 ou plus"),
+#     ordered = TRUE
+#   ) %>% 
+#     as.numeric(),
+#   
+#   delai_diag_cat = factor(
+#     delai_diag_cat,
+#     levels = c("No symptoms","<= 5", "(5;10]", "(10;15]", "15+"),
+#     ordered = FALSE
+#     )%>% 
+#     as.numeric()
+#   )
+# 
+# tbl_descriptive2 <- imputed_data_O2_2 %>%
+#   dplyr::select(all_of(outcome_variable), all_of(predictor_variables)) %>% 
+#   tbl_summary(
+#     by = all_of(outcome_variable),           
+#     statistic = list(
+#       all_continuous() ~ "{mean} ({sd})",
+#       all_categorical() ~ "{n} ({p}%)"
+#     ),
+#     missing = "no",                           
+#     digits = list(all_continuous() ~ 1, 
+#                   all_categorical() ~ c(0, 1))
+#   ) %>%
+#   modify_header(label ~ "**Characteristic**") %>% 
+#   bold_labels()
+# 
+# list_of_adj_tables2 <- 
+#   map(predictor_variables,
+#       ~fit_adjusted_glm(.x,outcome_variable,
+#                         adjustment_variable,
+#                         imputed_data_O2_2))
+# 
+# # Remove any NULL results (from failed models)
+# list_of_adj_tables2 <-
+#   list_of_adj_tables2[!sapply(list_of_adj_tables2,is.null)]
+# 
+# # Stack the individual predictor tables into one
+# if (length(list_of_adj_tables2) > 0) {
+#   tbl_adjusted_ors2 <- tbl_stack(list_of_adj_tables2, 
+#                                 group_header = NULL) %>%
+#     modify_table_body(
+#       ~ .x %>%
+#         mutate(
+#           est_ci = if_else(
+#             !is.na(estimate),
+#             sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+#             NA_character_
+#             )
+#           )
+#       ) %>%
+#     modify_header(
+#       label ~"**Characteristic**",
+#       est_ci ~"**Adjusted OR (95% CI)**"
+#     )
+#   print("Step 2: Adjusted Odds Ratios Table Created.")
+# } else {
+#   warning("No successful models were fitted for adjusted ORs.", 
+#           call. = FALSE)
+#   tbl_adjusted_ors2 <- NULL
+# }
+# 
+# adjust_str <- paste(adjustment_variable, collapse = " + ")
+# 
+# if (!is.null(tbl_adjusted_ors2)) {
+#     tbl_final2 <- tbl_merge(
+#       tbls = list(tbl_descriptive2, tbl_adjusted_ors2),
+#       tab_spanner = c("**Descriptive Statistics by Outcome**",
+#                       "**Age-Adjusted Model**")
+#     ) %>%
+#       modify_caption(
+#         paste0(
+#           "**Multivariate Logistic Regression Analysis for '",
+#           outcome_variable, 
+#           "' (Adjusted for '", adjust_str, "')**"))
+# 
+#     print("Step 3: Merged Table Created.")
+#     
+#     # --- Display the final table ---
+#     tbl_final2
+#     } else {
+#     print("Final merged table could not be created as the adjusted OR table is empty.")
+#     print("Displaying only the descriptive statistics table:")
+#     tbl_descriptive2 %>%
+#         modify_caption(
+#           paste0(
+#             "**Descriptive Statistics for Predictors of '", 
+#             outcome_variable,"'**"))
+#     }
+# 
+# tbl_final2
+
+```
+
+
+**Results** 
+- statut_marital_ini : En couple (2.02(1.28,3.15)) , Mariee(2.61(1.57,4.32)) -> CI large
+statut_marital_ini_cat :  Single/divorced (0.50 (0.33, 0.76))
+- type_endo : OMA only (2.10(1.04,4.25)) -> CI large 
+- first_preg_age_cat : >=34 (0.48(0.3,0.76))
+
+# II. Multivariate logistic regression
+
+## 1. DAG
+```{r}
+# DAG : 
+library(dagitty)
+library(ggdag)
+dag_code <- "dag {
+
+  age -> live_birth_bin_atleast_once_all
+  age -> statut_marital_ini_cat
+  age -> diplome_ini2
+  age -> situation_financiere
+  age -> situation_emploi_ini2
+  age -> operation_endo_bin
+  age -> nb_mal_sansEndoAde_cat
+  
+  nb_mal_sansEndoAde_cat -> live_birth_bin_atleast_once_all
+  
+  type_endo ->Endo_ade_categorie
+  type_endo -> operation_endo_bin
+  type_endo -> live_birth_bin_atleast_once_all
+  type_endo -> stade_dvpt_legere_severe
+  
+  operation_endo_bin -> complication_operation
+  operation_endo_bin -> live_birth_bin_atleast_once_all
+  
+  stade_dvpt_legere_severe -> live_birth_bin_atleast_once_all
+  stade_dvpt_legere_severe -> operation_endo_bin
+  
+  first_preg_age_cat -> live_birth_bin_atleast_once_all
+  
+}"
+
+dag_model <- dagitty(dag_code)
+
+ggdag(dag_model, text_size = 
+        3.5, text_col = "darkred", 
+      node_size = 5) +
+  theme_dag(base_size = 8, base_family = "Nunito") +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = rep("white", 100)) +  
+  scale_color_manual(values = rep("gray", 100))  
+
+
+adjustmentSets(dag_model, 
+               exposure ="operation_endo_bin", 
+               outcome = "live_birth_bin_atleast_once_all",
+               type= "canonical")
+```
+
+## 2. Final Model and Results
+### 1) Final model (ref)
+[1] "statut_marital_ini_cat"     "situation_financiere"      
+[3] "endo_ade_categorie"         "age_symptome_cat"          
+[5] "complication_operation_mod" "first_preg_age_cat" 
+
+```{r}
+data%>%sapply(function(x) sum(is.na(x)))
+```
+#### - Ref model 
+
+stade (multicollinearity)
+age_symptome_cat + delai_diag_cat_simple (multicollinearity)
+
+```{r}
+mod_glm_multivariable_0 <-
+  glm(
+    live_birth_bin_atleast_once_all ~
+      age +
+      diplome_ini2 +
+      statut_marital_ini_cat +
+      situation_financiere +
+      nb_mal_sansEndoAde_cat +
+      
+      endo_ade_categorie +
+      type_endo +
+      #age_symptome_cat +
+      
+      #delai_diag_cat_simple+
+      op_avant_1_preg +
+      operation_endo_bin +
+      
+      first_preg_age_cat,
+    data = imputed_data_O2,
+    family = binomial
+  )
+
+# summary(mod_glm_multivariable_0)
+AIC(mod_glm_multivariable_0)
+# vif(mod_glm_multivariable_0)
+```
+
+#### - Final model 
+- Variables selected by Marina
+
+```{r}
+# Final model
+mod_glm_multivariable_final <- glm(
+  live_birth_bin_atleast_once_all ~
+    
+    age +
+    statut_marital_ini_cat +
+    situation_financiere +
+    
+    nb_mal_sansEndoAde_cat +
+    
+    first_preg_age_cat +
+    
+    type_endo +
+    operation_endo_bin,
+  
+  data = imputed_data_O2,
+  family = binomial
+)
+summary(mod_glm_multivariable_final)
+AIC(mod_glm_multivariable_final)
+```
+
+
+### 2) Assumption test
+#### - Log linearity: OK
+```{r}
+data <- imputed_data_O2
+
+# In R
+df <- imputed_data_O2
+df$log_x <- log(df$age)
+df$x_logx <- df$age * log(df$age)
+
+model <- glm(live_birth_bin_atleast_once_all ~ age + x_logx, family = binomial, data = df)
+summary(model)  # Check p-value for x_logx
+```
+
+#### - Hosmer-Lemeshow : OK  p > 0.05
+```{r}
+# Hosmer-Lemeshow p-value> 0.05
+y_obs <- ifelse(imputed_data_O2$live_birth_bin_atleast_once_all == "Oui", 1, 0)
+hoslem <- hoslem.test(y_obs, fitted(mod_glm_multivariable_final), g = 10)
+hoslem_p <- hoslem$p.value; hoslem_p
+```
+
+#### - VIF : OK (<5)
+```{r}
+# Multicollinearity Check : <5
+vif(mod_glm_multivariable_final)
+```
+
+## 3) Results
+
+```{r}
+# Results 
+# 1) summary()
+summary(mod_glm_multivariable_final)
+
+# 2) tidy(exponentiate=TRUE) results table 
+res_multivar_glm <- tidy(mod_glm_multivariable_final, 
+                         exponentiate = TRUE, conf.int = 0.95) %>%
+  as.tibble()
+
+res_multivar_glm_mod <- res_multivar_glm[, c("term", "estimate", "conf.low", "conf.high", "p.value")] %>%
+  mutate(across(c(estimate,conf.low, conf.high), ~ round(.x, 2)),
+         p.value= p.value %>% round(4))
+
+res_multivar_glm_mod <- res_multivar_glm_mod %>%
+  mutate(IC95 = paste0(conf.low, "–", conf.high)) %>% 
+  dplyr::select(term, estimate, IC95 , p.value,conf.low,conf.high)
+
+# Remove the intercept result
+res_multivar_glm_mod <-res_multivar_glm_mod[-1,]
+
+# Check only significants variables
+res_multivar_glm_mod%>% filter(p.value<0.05)
+```
+
+#### - Save the results table
+
+```{r}
+
+# 1. Preparation 
+data <- imputed_data_O2
+outcome_variable <- "live_birth_bin_atleast_once_all"
+covariables <- c(
+  "age",
+  "statut_marital_ini_cat",
+  "situation_financiere",
+  "nb_mal_sansEndoAde_cat",
+  
+  "first_preg_age_cat",
+  
+  "type_endo" ,
+  "operation_endo_bin"
+)
+
+# 2. Descriptive table
+tbl_descriptive <- data %>%
+  dplyr::select(all_of(outcome_variable), all_of(covariables)) %>%
+  tbl_summary(
+    by = all_of(outcome_variable),         
+    statistic = list(                     
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no",
+    digits = list(all_continuous() ~ 1,
+                  all_categorical() ~ c(0, 1)) 
+  ) %>%
+  modify_header(label ~ "**Characteristic**") %>%
+  bold_labels()
+
+# 3. Multivariable analysis results table
+tbl_glm_multivariable <- tbl_regression(mod_glm_multivariable_final, exponentiate = TRUE, conf.int = TRUE)
+
+# 4. Combined table
+tbl_combined <- tbl_merge(
+  tbls = list(tbl_descriptive, tbl_glm_multivariable),
+  tab_spanner = c("**Descriptive Statistics**", "**Multivariable Logistic Regression**")
+);tbl_combined
+
+# 5. tbl_merge to dataframe
+df_combined <- as_tibble(tbl_combined)
+
+# 6. Save as Excel : update: 250722
+#write_xlsx(df_combined, path = "O2_glm_multivar_LiveBirth.xlsx")
+
+```
+
+
+## 3) Visualization of results
+
+```{r}
+#------------
+#  gt table
+#------------
+library(gt)
+res_multivar_glm_mod %>%
+  gt() %>%
+  tab_header(
+    title = md("**Multivariate Logistic Regression: **  
+    *Factors Associated with Live Birth*")
+  ) %>%
+  cols_label(
+    term = "Variables",
+    estimate = "Adjusted OR",
+    IC95 = "95% CI",
+    p.value = "p-value"
+  ) %>% 
+  fmt_markdown(columns = everything()) %>%
+  tab_options(
+    table.font.size = 12,
+    heading.title.font.size = 14,
+    heading.align = "left",
+    column_labels.font.weight = "bold",
+    table.border.top.color = "black",
+    table.border.bottom.color = "black",
+    row.striping.include_table_body = TRUE,
+    row.striping.background_color = "#f9f9f9"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = p.value,
+      rows = as.numeric(gsub("<", "", p.value)) < 0.05
+    )
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = term
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = c(IC95, p.value)
+  )
+
+#---------------
+#  Forest plot 
+#---------------
+res_multivar_glm$term <- factor(res_multivar_glm$term, 
+                                levels = rev(res_multivar_glm$term))
+
+ggplot(res_multivar_glm, aes(x = term, y = estimate)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray") +
+  coord_flip() +  
+  labs(
+    title = "Résultats du modèle de régression logistique multivariée",
+    x = NULL,
+    y = "OR (Odds Ratio avec IC 95%)"
+  ) +
+  theme_minimal()
+
+#------------------------------
+#  Forest plot with the ORs
+#------------------------------
+library(dotwhisker)
+library(grid)
+
+res_multivar_glm_mod$term <- c(
+  "Age",
+  "Maried/Couple vs Single/divorced",
+  "Financial situation:  Balanced vs Difficult/In debt",
+  "Balanced vs Comfortable/Very comfortable",
+  "Nb_comorbidity: 0 vs 1",
+  "0 vs 2+",
+  "Age_1stPregnancy: <30 vs 30-34",
+  "<30 vs >=34",
+  "type_endo:  vs DIE only vs SPE only",
+  "DIE only vs OMA only",
+  "DIE only vs ADENO only",
+  "DIE only vs Multiple",
+  "DIE only vs No mention",
+  "Endo surgery: No vs Yes"
+)
+
+res_multivar_glm_mod <- res_multivar_glm_mod %>%
+  mutate(
+    label_ci = sprintf("%.2f (%.2f–%.2f)", estimate, conf.low, conf.high)
+  )
+
+dwplot(res_multivar_glm_mod, show_intercept = TRUE) + 
+  geom_text(aes(x = 3.2, y = term, label = label_ci), #paste(estimate, "(", IC95, ")")
+            hjust = -0.1, size = 3) +
+  theme_minimal() +
+  labs(title = "Results of Multivariable Logistic Regression",
+       subtitle ="- Experience of giving a Live birth : Yes/No",
+       x= "OR with 95% CI") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0, size = 12,face = "bold"),
+    plot.subtitle = element_text(hjust = 0, size = 10,face = "bold"), 
+    axis.title.x = element_text(hjust = 0.3, vjust = 0),
+    panel.grid = element_blank(),                
+    panel.background = element_blank(),           
+    axis.line.x =element_blank(), 
+    axis.line.y = element_blank(),                
+    #axis.ticks = element_line(color = "black"),   
+    axis.text = element_text(color = "black"),
+    axis.text.y = element_text(size = 10)
+  ) +
+  scale_x_continuous(breaks = 0:3) +              
+  coord_cartesian(xlim = c(0, 5), ylim = c(1, 15)) +
+  annotation_custom(
+    grob = textGrob("OR (95%CI)", 
+                    gp = gpar(fontsize = 10, col = "black",fontface = "bold")),
+    xmin = 2, ymin = 14.5)+
+  geom_segment(aes(x = -0.3, xend = 3.2, y = 0.5, yend = 0.5),  
+             color = "black", size = 0.5)+
+  geom_linerange(aes(xmin = conf.low, xmax = conf.high, y = term),
+                 color = "red", size = 0.5, linetype=1)+
+  geom_vline(xintercept = c(0,2,3), linetype = "dashed", color = "gray90", size = 0.5)+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black", size = 0.5)->
+  O2_Forest_Plot
+
+
+O2_Forest_Plot
+```
+
+#### - Save Plot
+```{r}
+# Save  : update 250722
+ggsave("O2_Forest_Plot.jpg", O2_Forest_Plot,
+       width = 10, height = 5, units = "in", dpi = 300)
+```
+

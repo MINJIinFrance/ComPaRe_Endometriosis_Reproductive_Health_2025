@@ -1,0 +1,2127 @@
+---
+title: "04_O3_Statistical_Analysis_GLM"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : **3 Objective**, Statistical Analysis for the participant population
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Statistical Analysis
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-06-02
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+# *O3 per ID*
+
+$Libraries$
+```{r}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(purrr) # reduce()
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gt)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+library(chromote)
+library(car)
+library(mediation)
+library(shiny)
+library(shinydashboard)
+library(data.table)
+library(DT)
+library(mice)
+library(dagitty)
+library(ggdag)
+library(gridExtra)
+library(grid)
+library(dotwhisker)
+```
+
+# 0. Import the imputed data 
+
+```{r}
+imputed_data_O3_perID <- 
+  read.csv("C:/Stage_Master2/Stage_M2_Complic_Gross/imputed_data_O3_perID.csv") %>%
+  dplyr::select(-X)
+
+#----------------------
+#  Imputed Dataframe
+#----------------------
+imputed_data_O3_perID <- imputed_data_O3_perID %>%
+  mutate(
+    diplome_ini2 = factor(
+      diplome_ini2,
+      levels = c("<=Baccalauréat/Aucun/Autre", "Bac+2", ">=Bac+3"),
+      ordered = FALSE
+    ),
+    
+    situation_financiere   = factor(
+      situation_financiere,
+      levels = c(
+        "Balanced",
+        "Difficult/In debt",
+        "Comfortable/Very comfortable"
+      ),
+      ordered = FALSE
+    ),
+    
+    family_atcd_EndoAdeno_cat =
+      factor(
+        family_atcd_EndoAdeno_cat,
+        levels = c("Pas d'antécédents", "Antécédents")
+      ),
+    
+    family_atcd_doul_pelv =
+      factor(
+        family_atcd_EndoAdeno_cat,
+        levels = c("Pas d'antécédents", "Antécédents")
+      ),
+    
+    endo_ade_categorie = factor(
+      endo_ade_categorie,
+      levels = c("Only endometriosis", "Only adenomyosis", "Both")
+    ),
+    
+    type_endo =
+      factor(
+        type_endo,
+        levels = c(
+          "DIE only",
+          "SPE only",
+          "OMA only",
+          "ADENO only",
+          "Multiple types",
+          "Aucun mentionné/nsp"
+        )
+      ),
+    
+    stade_dvpt_legere_severe = factor(
+      stade_dvpt_legere_severe,
+      levels = c(
+        "I-II",
+        "III-IV",
+        "No surgery",
+        "Non et nsp"
+      )
+    ), 
+    
+    op_avant_1_preg = factor(
+      op_avant_1_preg,
+      levels = c("Non","Oui")
+    ),
+    
+    complication_operation = factor(
+      complication_operation,
+      levels = c("Non", "Oui", "No surgery")
+    ),
+    
+    age_symptome_cat = factor(
+      age_symptome_cat,
+      levels = c(
+        "<= 13",
+        "(13;15]",
+        "(15;22]",
+        "22+",
+        "No symptoms"
+      ),
+      ordered = FALSE
+    ),
+
+    age_firstOP_endoadeno_cat = factor(
+      age_firstOP_endoadeno_cat,
+      levels = c("No operation","<27", "27-31", "31>="),
+      ordered = FALSE
+    ),
+    
+    nb_mal_sansEndoAde_cat = factor(
+      nb_mal_sansEndoAde_cat,
+      levels = c("0", "1", "2 ou plus"),
+      ordered = FALSE
+    ),
+    
+    comorbidities_bin = case_when(
+      nb_mal_sansEndoAde_cat =="0" ~ "Non",
+      TRUE~ "Oui"
+    ),
+    
+    delai_diag_cat = factor(
+      delai_diag_cat,
+      levels = c("<= 5", "(5;10]", "(10;15]", "15+", "No symptoms"),
+      ordered = FALSE
+    ),
+    
+    Travail_accouchement_perID = factor(
+      Travail_accouchement_perID,
+      levels = c(
+        "Seul travail provoqué",
+        "Seul travail spontané",
+        "Travail mixte",
+        "Pas de travail",
+        "No_delivery"
+      )
+    ),
+    
+    Mode_accouchement_perID = factor(
+      Mode_accouchement_perID,
+      levels = c(
+        "Seule voie Basse", 
+        "Seule Césarienne", 
+        "Both", 
+        "No_delivery")
+    ),
+    
+    first_preg_age_cat = factor(
+      first_preg_age_cat,
+      levels = c("<29", "29-34", ">=34"),
+      ordered = FALSE
+    ),
+    
+    total_complications_bin_perID = 
+      as.factor(total_complications_bin_perID )
+  ) 
+  
+```
+
+#------------------------------------
+# I. Binary outcome 
+#-------------------------------------
+## 1. Univariable analysis adjusted for age 
+### 1) Results Table 
+
+
+```{r}
+#----------------------
+#  Define the data
+#----------------------
+data <- imputed_data_O3_perID %>% 
+  dplyr::select(-total_complications_cat_perID)
+
+#---------------
+# Configuration
+#---------------
+# 1. Define your outcome and adjustment variables 
+outcome_variable <- "total_complications_bin_perID"
+adjustment_variable <- "age"
+# adjustment_variable <- c("age",
+#                          "first_preg_age_cat",
+#                          "statut_marital_ini_cat",
+#                          "situation_financiere")
+
+#-----------------------------
+#  Data Preparation & Checks
+#-----------------------------
+# Ensure outcome variable is suitable for logistic regression (factor or 0/1 numeric)
+if (!is.factor(imputed_data_O3_perID[[outcome_variable]]) && !all(imputed_data_O3_perID[[outcome_variable]] %in% c(0, 1, NA))) {
+  stop(paste("Outcome variable '", outcome_variable, "' must be a factor or numeric with values 0/1."))
+  }
+
+# Convert outcome to factor if it's 0/1 numeric, as tbl_summary needs factor for 'by'
+if (is.numeric(data[[outcome_variable]])) {
+    data <- data %>%
+        mutate(!!sym(outcome_variable) := factor(!!sym(outcome_variable)))
+    print(paste("INFO: Converted numeric outcome variable '",
+                outcome_variable, "' to factor."))
+    }
+
+# Ensure adjustment variable exists
+if (!all(adjustment_variable %in% names(data))) {
+  stop(paste("Some adjustment variables not found in the dataframe:", 
+             paste(setdiff(adjustment_variable, names(data)), collapse = ", ")))
+}
+# if (!adjustment_variable %in% names(data)) {
+#   stop(paste("Adjustment variable '", adjustment_variable, "' not found in the dataframe."))
+#   }
+
+missing_vars <- setdiff(adjustment_variable, names(data))
+if (length(missing_vars) > 0) {
+  stop(paste("Adjustment variable(s) not found in the dataframe:", paste(missing_vars, collapse = ", ")))
+  }
+
+# Identify predictor variables (excluding outcome and adjustment variable)
+predictor_variables <- setdiff(names(data), 
+                               c(outcome_variable, adjustment_variable))
+
+if (length(predictor_variables) == 0) {
+    stop("No predictor variables found after excluding outcome and adjustment variables.")
+  }
+
+print(paste("Outcome:", outcome_variable))
+print(paste("Adjustment:", paste(adjustment_variable, collapse=", ")))
+print(paste("Predictors:", paste(predictor_variables, collapse=", ")))
+
+
+#-----------------------------------------------------------------
+# 1. Create Descriptive Statistics Table (Stratified by Outcome)
+#-----------------------------------------------------------------
+# This table shows N(%) or Mean (SD) for each predictor within each outcome group
+tbl_descriptive <- data %>%
+  dplyr::select(all_of(outcome_variable), all_of(predictor_variables)) %>% 
+  tbl_summary(
+    by = all_of(outcome_variable),           # Stratify by the outcome
+    statistic = list(                         # Define stats for variable types
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no",                           
+    digits = list(all_continuous() ~ 1, 
+                  all_categorical() ~ c(0, 1)) # Control digits
+  ) %>%
+  # add_p() %>%     # Optional: Add p-value for difference between groups
+  modify_header(label ~ "**Characteristic**") %>% 
+  # Remove the overall column if you only want stratified stats (optional)
+  # remove_overall() %>%
+  bold_labels()
+
+print("Step 1: Descriptive Statistics Table Created.")
+# tbl_descriptive # Uncomment to view intermediate table
+
+#-------------------------------------------------------------
+# 2. Create Adjusted Multivariate Logistic Regression Table
+#-------------------------------------------------------------
+# This function fits glm(outcome ~ predictor + ajusted variables ) and returns a gtsummary table row
+fit_adjusted_glm <- function(predictor, outcome_var, adjust_var, data) {
+  # Use backticks for safety with non-standard names
+  adjust_str <- paste(sprintf("`%s`", adjustment_variable), collapse = " + ")
+    # adjust_vars는 벡터
+  formula_str <- paste0("`", outcome_var, "` ~ `", predictor, "` + ", adjust_str)
+  
+  # Fit the model
+  model <- tryCatch(
+    glm(as.formula(formula_str), data = data, family = binomial(link = "logit")),
+    error = function(e) {
+      warning(paste("Could not fit model for predictor:", predictor, "- Error:", conditionMessage(e)), call. = FALSE)
+      return(NULL) # Return NULL if model fails
+    }
+  )
+  
+  # If model failed, return NULL
+  if (is.null(model)) return(NULL)
+  
+  # Create a regression table, keeping only the row(s) for the main predictor
+  tbl_regression(model, exponentiate = TRUE, conf.int=TRUE) %>%
+    # Keep rows where 'variable' matches the predictor name
+    # This correctly handles factor variables which have multiple rows
+    modify_table_body(~ dplyr::filter(.x, variable == predictor)) 
+  }
+
+# Apply the function to each predictor variable
+list_of_adj_tables <- map(predictor_variables,
+                          ~fit_adjusted_glm(.x, outcome_variable,
+                                            adjustment_variable,
+                                            data))
+
+# Remove any NULL results (from failed models)
+list_of_adj_tables <- list_of_adj_tables[!sapply(list_of_adj_tables,
+                                                 is.null)]
+
+# Stack the individual predictor tables into one
+if (length(list_of_adj_tables) > 0) {
+  tbl_adjusted_ors <- tbl_stack(list_of_adj_tables, 
+                                group_header = NULL) %>%
+    modify_table_body(
+      ~ .x %>%
+        mutate(
+          est_ci = if_else(
+            !is.na(estimate),
+            sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+            NA_character_
+            )
+          )
+      ) %>%
+    modify_header(
+      label ~"**Characteristic**",
+      est_ci ~"**Adjusted OR (95% CI)**"
+    )
+  print("Step 2: Adjusted Odds Ratios Table Created.")
+} else {
+  warning("No successful models were fitted for adjusted ORs.", 
+          call. = FALSE)
+  tbl_adjusted_ors <- NULL
+}
+
+#----------------------------------------------
+# 3. Merge Descriptive and Adjusted OR Tables
+#----------------------------------------------
+adjust_str <- paste(adjustment_variable, collapse = " + ")
+
+if (!is.null(tbl_adjusted_ors)) {
+    # Merge the two tables. gtsummary aligns rows based on the 'label' column.
+    tbl_final <- tbl_merge(
+      tbls = list(tbl_descriptive, tbl_adjusted_ors),
+      # Add spanners to differentiate the table sections
+      tab_spanner = c("**Descriptive Statistics by Outcome**",
+                      "**Age-Adjusted Model**")
+    ) %>%
+      modify_caption(
+        paste0(
+          "**Multivariate Logistic Regression Analysis for '",
+          outcome_variable, 
+          "' (Adjusted for '", adjust_str, "')**"))
+
+    print("Step 3: Merged Table Created.")
+    
+    # --- Display the final table ---
+    tbl_final
+    } else {
+    print("Final merged table could not be created as the adjusted OR table is empty.")
+    print("Displaying only the descriptive statistics table:")
+    tbl_descriptive %>%
+        modify_caption(
+          paste0(
+            "**Descriptive Statistics for Predictors of '", 
+            outcome_variable,"'**"))
+    }
+#tbl_final
+
+#------------------------------------------------------------
+# MERGED TABLE as tibble for the facility of coping results 
+#------------------------------------------------------------
+table_res2_final <- as_tibble(tbl_final) %>% 
+  dplyr::select(-"**OR**",-"**95% CI**",-"**p-value**")
+
+# save the table : 2025-05-30
+#table_univariable_O3_bin<- table_res2_final
+table_res2_final
+```
+
+### 2) Pre-selection of variables for the multivariate regression model
+ - P-value <= 0.2
+```{r}
+ls_var_uni_results <- tbl_final$table_body %>% filter(p.value_2<=0.2) %>% distinct(variable) %>% pull()
+ls_var_uni_results
+```
+
+
+**Results** 250602
+- diplome_ini2 : >=Bac+3 (0.45 (0.24, 0.82)) 
+- gynecologique_diseases : Oui (2.89 (1.10, 9.05)) -> Large CI
+- infertilite_diag : Oui (2.66 (1.00, 8.39))
+- age_regle_cat_simple : >=12 (0.38 (0.20, 0.67))
+- stade_dvpt_III_IV : Oui (1.94 (1.01, 3.89))
+- age_symptome_cat : (15;22] (0.49 (0.24, 0.98)), 22+ (0.53 (0.28, 0.97))
+- age_firstOP_endoadeno_cat :  31>= (3.55 (1.43, 9.09)) -> Large CI
+- history_FC_preterm_IVGIMG_perID : Oui (2.49 (1.41, 4.55))
+- Mode_accouchement_perID : Seule Césarienne (2.57 (1.48, 4.62))
+- VD_perID : Oui (0.40 (0.22, 0.69))
+- Csection_perID : Oui (2.50 (1.46, 4.40))
+- labour_natural_perID : Oui (0.57 (0.36, 0.91))
+- doul_abdo_avant_1_preg : Oui (2.19 (1.36, 3.56))
+
+## 2. Multivariate logistic regression
+
+### 1) DAG
+```{r}
+#---------------------
+#  Creation  of DAG 
+#---------------------
+library(dagitty)
+library(ggdag)
+dag_code <- "dag {
+  age -> total_complications_bin_perID
+  age -> statut_marital_ini_cat
+  age -> diplome_ini2
+  diplome_ini2 -> situation_financiere
+  age -> situation_financiere
+  age -> situation_emploi_ini2
+  age -> operation_endo_bin
+  age -> nb_mal_sansEndoAde_cat
+  age -> metabolic_syndrome
+  age -> nb_total_gross
+  
+  age_regle_cat_simple -> metabolic_syndrome
+  age_regle_cat_simple -> total_complications_bin_perID
+  
+  metabolic_syndrome -> nb_mal_sansEndoAde_cat
+  metabolic_syndrome -> total_complications_bin_perID
+  metabolic_syndrome -> history_FC_preterm_IVG_IMG
+  
+  gynecologique_diseases -> total_complications_bin_perID
+  gynecologique_diseases -> nb_mal_sansEndoAde_cat
+  gynecologique_diseases -> Csection_perID
+  gynecologique_diseases -> nb_total_gross
+  gynecologique_diseases -> infertilite_diag
+  gynecologique_diseases -> history_FC_preterm_IVG_IMG
+  
+  autoimmune_diseases -> history_FC_preterm_IVG_IMG
+  autoimmune_diseases -> nb_mal_sansEndoAde_cat
+  autoimmune_diseases -> total_complications_bin_perID
+  
+  nb_mal_sansEndoAde_cat -> total_complications_bin_perID
+  nb_mal_sansEndoAde_cat -> Csection_perID
+
+  Csection_perID -> total_complications_bin_perID
+  total_complications_bin_perID -> Csection_perID
+  
+  type_endo -> operation_endo_bin
+  type_endo -> stade_dvpt_III_IV
+  type_endo -> stade_dvpt_legere_severe
+  type_endo -> Endo_ade_categorie
+  type_endo -> indic_ovaire_touche
+  
+  DIE -> stade_dvpt_III_IV
+  stade_dvpt_III_IV -> operation_endo_bin
+  operation_endo_bin -> indic_ovaire_touche
+  operation_endo_bin -> trompe_anomalie 
+  operation_endo_bin -> nb_total_gross
+  operation_endo_bin -> complication_operation
+
+  indic_ovaire_touche -> infertilite_diag
+  trompe_anomalie -> infertilite_diag
+  trompe_anomalie -> nb_total_gross
+  
+  op_avant_1_preg -> operation_endo_bin
+  op_avant_1_preg -> infertilite_diag
+  
+  infertilite_diag -> operation_endo_bin
+  infertilite_diag -> conception_PMA_perID
+  infertilite_diag -> conception_operation_perID
+  
+  conception_operation_perID -> operation_endo_bin
+  conception_operation_perID -> nb_total_gross
+  
+  maternal_age -> infertilite_diag
+  maternal_age -> conception_PMA_perID
+  maternal_age -> total_complications_bin_perID
+  maternal_age -> nb_total_gross
+  maternal_age -> history_FC_preterm_IVG_IMG
+  
+  first_preg_age_cat -> infertilite_diag
+  first_preg_age_cat ->  conception_PMA_perID
+  first_preg_age_cat -> total_complications_bin_perID
+  first_preg_age_cat -> nb_total_gross
+  first_preg_age_cat -> history_FC_preterm_IVG_IMG
+  
+  conception_PMA_perID -> total_complications_bin_perID
+  conception_PMA_perID -> nb_total_gross
+  
+  nb_total_gross -> nb_live_births_all
+  nb_live_births_all -> total_complications_bin_perID
+  nb_live_births_all -> live_birth_bin_atleast_once_all
+  
+  history_FC_preterm_IVGIMG_perID -> nb_live_births_all
+  history_FC_preterm_IVGIMG_perID -> nb_total_gross
+  
+  first_preg_age_cat -> op_avant_1_preg
+  age_firstOP_endoadeno_cat -> op_avant_1_preg
+  
+  conception_operation_perID -> methode_conception_perID_cat_simple_mod
+  conception_PMA_perID -> methode_conception_perID_cat_simple_mod
+
+  methode_conception_perID_cat_simple_mod -> live_birth_bin_atleast_once_all
+  methode_conception_perID_cat_simple_mod -> operation_endo_bin 
+  methode_conception_perID_cat_simple_mod -> total_complications_bin_perID
+}"
+
+dag_model <- dagitty(dag_code)
+
+#------------------------
+# Visualisation of DAG
+#------------------------
+library(ggplot2)
+library(ggrepel)
+library(ggdag)
+
+# tidy DAG
+dag_tidy <- tidy_dagitty(dag_model)
+nodes_df<- dag_tidy$data
+edges <- edges(dag_model)
+ggplot() +
+  # Edges
+  geom_segment(data = nodes_df, 
+               aes(x = x, y = y, xend = xend, yend = yend),
+               arrow = arrow(length = unit(0.01, "npc"), 
+                             angle = 40, type="closed"), 
+               color = "gray50", linewidth = 0.6) +  # size 대신 linewidth
+  
+  # Node
+  geom_point(data = nodes_df, 
+             aes(x = x, y = y), 
+             shape = 21, fill = "lightcyan", 
+             color = "steelblue", size = 10, stroke = 0.4,
+             alpha = 0.2) +
+  
+  # label text 
+  geom_text_repel(data = distinct(nodes_df, name, .keep_all = TRUE), 
+                  aes(x = x, y = y, label = name), 
+                  color = "brown", size = 2.5) +
+  
+  
+  # theme
+  theme_dag(base_size = 10, base_family = "Arial") +
+  theme(
+    legend.position = "none",
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white"),
+    panel.grid = element_blank()
+  )
+
+
+library(dplyr)
+# geom_point size = 10 →  10*0.035 = 0.35 
+r <- 0.35  
+
+edges_adjusted <- nodes_df %>%
+  mutate(
+    dx = xend - x,
+    dy = yend - y,
+    dist = sqrt(dx^2 + dy^2),
+    xend_adj = xend - r * (dx / dist),
+    yend_adj = yend - r * (dy / dist)
+  )
+
+ggplot() +
+  geom_segment(
+    data = edges_adjusted,
+    aes(
+      x = x,
+      y = y,
+      xend = xend_adj,
+      yend = yend_adj
+    ),
+    arrow = arrow(
+      length = unit(0.015, "npc"),
+      angle = 30,
+      type = "open"
+    ),
+    color = "gray50",
+    linewidth = 0.6
+  ) +
+  geom_point(
+    data = nodes_df,
+    aes(x = x, y = y),
+    shape = 21,
+    fill = "lightcyan",
+    color = "steelblue",
+    size = 10,
+    stroke = 0.4,
+    alpha = 0.2
+  ) +
+  geom_text_repel(
+    data = distinct(nodes_df, name, .keep_all = TRUE),
+    aes(x = x, y = y, label = name),
+    color = "brown",
+    size = 2.5
+  ) +
+  theme_dag(base_size = 10, base_family = "Arial") +
+  theme(
+    legend.position = "none",
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white"),
+    panel.grid = element_blank()
+  )
+
+#-------------------------------------
+# Finding the adjustements variables
+#-------------------------------------
+adjustmentSets(dag_model, 
+               exposure ="age_regle_cat_simple", 
+               outcome = "total_complications_bin_perID",
+               type= "canonical")
+```
+
+### 2) Final Model and Results
+
+#### * Model_version1
+```{r}
+#-------------------------------
+#   logsitic regression model
+#-------------------------------
+mod_glm_multivariate <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo +
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        indic_ovaire_touche+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        doul_abdo_avant_1_preg,
+    data = imputed_data_O3_perID,
+    family = binomial
+  )
+
+#------------
+#  Results 
+#------------
+# 1) summary()
+summary(mod_glm_multivariate)
+
+# 2) tidy(exponentiate=TRUE) 
+library(tibble)
+res_multivar_glm <- tidy(mod_glm_multivariate, 
+                         exponentiate = TRUE, conf.int = 0.95) %>%
+  as.tibble()
+
+res_multivar_glm_mod <- res_multivar_glm[, c("term", "estimate", "conf.low", "conf.high", "p.value")] %>%
+  mutate(across(c(estimate,conf.low, conf.high), ~ round(.x, 2)),
+         p.value= p.value %>% round(4))
+
+res_multivar_glm_mod <- res_multivar_glm_mod %>%
+  mutate(IC95 = paste0(conf.low, "–", conf.high)) %>% 
+  dplyr::select(term, estimate, IC95 , p.value,conf.low,conf.high)
+res_multivar_glm_mod
+```
+
+
+##### - Assumptions Check and Sensitivity analysis
+###### > Sensitivity test : Outlier
+```{r}
+#--------------------------------
+#  Multicollinearity Check : <2
+#--------------------------------
+vif(mod_glm_multivariate)
+
+#----------------------------------
+#  Outliers and Influences Check : 17 and 169
+#----------------------------------
+library(car)
+influencePlot(mod_glm_multivariate)
+# StudRes(Studentized Residuals) : <-2 ou >2 -> outlier
+# Hat (Leverage, Hat value) : high leverage point (p/n, p = number of variables, n= number of samples)
+# Cook's distance : Residus + Leverage
+# CookD > 4/n (n= number of samples)
+# - 4/378 = 0.016
+
+plot(mod_glm_multivariate, which = 4)  # Cook’s distance
+#-> 17 and 169 : Big residus, high leverage -> Outlier and big influence
+
+#--------------------------
+#   Sensitivity analysis  
+#--------------------------
+# 1. Create a new model without 17, 169 individuals
+mod_glm_multivariate_sensitivity <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo +
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        #operation_endo_bin+
+        indic_ovaire_touche+
+        #conception_PMA_perID+
+        #conception_operation_perID+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        #op_avant_1_preg+
+        doul_abdo_avant_1_preg,
+    data = imputed_data_O3_perID[-c(17,169),],
+    family = binomial
+  )
+summary(mod_glm_multivariate_sensitivity)
+
+# 2. Compare the AIC of two differents model for the sensitivity analysis 
+AIC(mod_glm_multivariate, mod_glm_multivariate_sensitivity)
+
+# 3. Compare the AUC of two models for the sensitivity analysis 
+library(pROC)
+# 3-1) Prepare the FULL DATASET model for ROC and AUC
+model_data <- na.omit(imputed_data_O3_perID)
+mod_glm_multivariate <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo +
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        #operation_endo_bin+
+        indic_ovaire_touche+
+        #conception_PMA_perID+
+        #conception_operation_perID+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        #op_avant_1_preg+
+        doul_abdo_avant_1_preg,
+    data = model_data,
+    family = binomial
+  )
+prob <- predict(mod_glm_multivariate, type = "response")
+roc_full <- roc(response = model_data$total_complications_bin_perID, predictor = prob)
+
+# 3-2) Prepare the MODIFIED DATASET model for ROC and AUC
+mod_glm_multivariate_sensitivity <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo +
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        #operation_endo_bin+
+        indic_ovaire_touche+
+        #conception_PMA_perID+
+        #conception_operation_perID+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        #op_avant_1_preg+
+        doul_abdo_avant_1_preg,
+    data = model_data[-c(17,169),],
+    family = binomial
+  )
+prob_sensitivity <- predict(mod_glm_multivariate_sensitivity, type = "response")
+roc_no_outlier <- roc(response = model_data[-c(17,169),]$total_complications_bin_perID, predictor = prob_sensitivity)
+
+# 4. Compare 
+plot(roc_full, col="blue")
+plot(roc_no_outlier, add=TRUE, col="red")
+auc(roc_full) # 0.7986
+auc(roc_no_outlier) # 0.7998
+
+
+# 5. Results 
+# There is no big differences between two model, so I'll keep the two individus with big leverage and big influence 
+```
+
+
+###### > Sensitivity test : Inclusion of variable
+
+- model with VS without Macrophenotype of endometriosis : No big differences 
+- model with DIE vs with Macrophenotype of endometriosis : No big differences 
+
+```{r}
+##################################################################################
+# model with VS without Macrophenotype of endometriosis : no big differences 
+#--------------------------
+#   Sensitivity analysis  
+#--------------------------
+# 0. Original model with type_endo
+mod_glm_multivariate <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo + # HERE
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        indic_ovaire_touche+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        doul_abdo_avant_1_preg,
+    data = model_data,
+    family = binomial
+  )
+
+# 1. Create a new model without type_endo
+mod_glm_multivariate_sensitivity <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        indic_ovaire_touche+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        doul_abdo_avant_1_preg,
+    data = imputed_data_O3_perID,
+    family = binomial
+  )
+summary(mod_glm_multivariate_sensitivity)
+
+# 2. Compare the AIC of two differents model for the sensitivity analysis 
+AIC(mod_glm_multivariate, mod_glm_multivariate_sensitivity)
+
+# 3. Compare the AUC of two models for the sensitivity analysis 
+library(pROC)
+# 3-1) Prepare the FULL DATASET model for ROC and AUC
+model_data <- na.omit(imputed_data_O3_perID)
+prob <- predict(mod_glm_multivariate, type = "response")
+roc_type_endo <- roc(response = model_data$total_complications_bin_perID, predictor = prob)
+
+# 3-2) ROC and AUC
+prob_sensitivity <- predict(mod_glm_multivariate_sensitivity, type = "response")
+roc_without <- roc(response = model_data$total_complications_bin_perID, predictor = prob_sensitivity)
+
+# 3-3) Visualisation and the AUC results
+plot(roc_type_endo, col="blue")
+plot(roc_without, add=TRUE, col="red")
+auc(roc_type_endo) # 0.7956
+auc(roc_without) # 0.7816
+
+# 4. Results 
+# There is no big differences between two model, so I'll keep the two individus with big leverag
+
+
+##################################################################################
+# Model with DIE vs with Macrophenotype of endometriosis : no big differences 
+#--------------------------
+#   Sensitivity analysis  
+#--------------------------
+# 0. Original model with type_endo
+mod_glm_multivariate <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo + # HERE
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        indic_ovaire_touche+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        doul_abdo_avant_1_preg,
+    data = model_data,
+    family = binomial
+  )
+
+# 1. Create a new model with DIE insetead of type_endo
+mod_glm_multivariate_sensitivity <-
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        DIE+ # HERE
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        indic_ovaire_touche+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        doul_abdo_avant_1_preg,
+    data = imputed_data_O3_perID,
+    family = binomial
+  )
+summary(mod_glm_multivariate_sensitivity)
+
+# 2. Compare the AIC of two differents model for the sensitivity analysis 
+AIC(mod_glm_multivariate, mod_glm_multivariate_sensitivity)
+
+# 3. Compare the AUC of two models for the sensitivity analysis 
+library(pROC)
+# 3-1) Prepare the FULL DATASET model for ROC and AUC
+model_data <- na.omit(imputed_data_O3_perID)
+prob <- predict(mod_glm_multivariate, type = "response")
+roc_type_endo <- roc(response = model_data$total_complications_bin_perID, predictor = prob)
+
+# 3-2) ROC and AUC
+prob_sensitivity <- predict(mod_glm_multivariate_sensitivity, type = "response")
+roc_DIE <- roc(response = model_data$total_complications_bin_perID, predictor = prob_sensitivity)
+
+# 3-3) Visualisation and the AUC results
+plot(roc_type_endo, col="blue")
+plot(roc_DIE, add=TRUE, col="red")
+
+auc(roc_type_endo) # 0.7956
+auc(roc_without) # 0.7816
+auc(roc_DIE) # 0.786
+
+# 4. Results 
+# There is no big differences between two model, so I'll keep the two individus with big leverage
+```
+
+
+#### * Model_version2_250620
+After the meeting with Marina in 19th of june
+ 1) Considering the results of univariable analysis with *p<=0.2*
+ 2) Considering correlation between :
+  - operation_endo_bin and age_firstOP_endoadeno_cat 
+  - > age_firstOP_endoadeno_cat
+ 3) Considering the correlation : 
+  - type_endo -> endo_ade_categorie(endo, adeno, both)
+  - type_endo -> DIE
+  - Remove stade information because of potential correlation with DIE
+  
+```{r}
+# list of significative variables with p-value<=0.2
+ls_var_uni_results
+
+#-------------------------------
+#   logsitic regression model
+#-------------------------------
+mod_glm_multivariate_1 <-
+  glm(
+    total_complications_bin_perID ~
+      diplome_ini2 +
+      age +
+      
+      gynecologique_diseases +
+      infertilite_diag +
+      autoimmune_diseases +
+      metabolic_syndrome +
+      comorbidities_bin +
+      
+      endo_ade_categorie +
+      DIE +
+      age_firstOP_endoadeno_cat +
+      indic_ovaire_touche +
+      
+      age_regle_cat_simple +
+      age_symptome_cat +
+      
+      nb_live_births_all +
+      history_FC_preterm_IVGIMG_perID +
+      first_preg_age_cat +
+      Mode_accouchement_perID +
+      Travail_accouchement_perID +
+      methode_conception_perID_cat_simple_mod +
+      
+      doul_abdo_avant_1_preg +
+      dysuria_avant_1_preg,
+    data = imputed_data_O3_perID,
+    family = binomial
+  )
+
+summary(mod_glm_multivariate_1)
+
+#------------
+#  Results 
+#------------
+# 1) summary()
+summary(mod_glm_multivariate_1)
+
+# 2) tidy(exponentiate=TRUE) 
+library(tibble)
+res_multivar_glm_1 <- tidy(mod_glm_multivariate_1, 
+                         exponentiate = TRUE, conf.int = 0.95) %>%
+  as.tibble()
+
+res_multivar_glm_mod_1 <- res_multivar_glm_1[, c("term", "estimate", "conf.low", "conf.high", "p.value")] %>%
+  mutate(across(c(estimate,conf.low, conf.high), ~ round(.x, 2)),
+         p.value= p.value %>% round(4))
+
+res_multivar_glm_mod_1 <- res_multivar_glm_mod_1 %>%
+  mutate(IC95 = paste0(conf.low, "–", conf.high)) %>% 
+  dplyr::select(term, estimate, IC95 , p.value,conf.low,conf.high)
+res_multivar_glm_mod_1
+
+```
+
+##### - Assumptions Check and Sensitivity analysis
+###### > Sensitivity test : Outlier and influence check
+```{r}
+#--------------------------------
+#  Multicollinearity Check : <2
+#--------------------------------
+vif(mod_glm_multivariate_1)
+
+#----------------------------------
+#  Outliers and Influences Check    : 17 and 316
+#----------------------------------
+library(car)
+influencePlot(mod_glm_multivariate_1)
+# StudRes(Studentized Residuals) : <-2 ou >2 -> outlier
+# Hat (Leverage, Hat value) : high leverage point (p/n, p = number of variables, n= number of samples)
+# Cook's distance : Residus + Leverage
+# CookD > 4/n (n= number of samples)
+# - 4/378 = 0.016
+
+plot(mod_glm_multivariate_1, which = 4)  # Cook’s distance
+#-> 17 and 316 : Big residus, high leverage -> Outlier and big influence
+
+#--------------------------
+#   Sensitivity analysis  
+#--------------------------
+# 1. Create a new model without 17 and 316 individuals
+mod_glm_multivariate_sensitivity <-
+  glm(
+    total_complications_bin_perID ~
+      diplome_ini2 +
+      age +
+      
+      gynecologique_diseases +
+      infertilite_diag +
+      autoimmune_diseases +
+      metabolic_syndrome +
+      comorbidities_bin +
+      
+      endo_ade_categorie +
+      DIE +
+      age_firstOP_endoadeno_cat +
+      indic_ovaire_touche +
+      
+      age_regle_cat_simple +
+      age_symptome_cat +
+      
+      nb_live_births_all +
+      history_FC_preterm_IVGIMG_perID +
+      first_preg_age_cat +
+      Mode_accouchement_perID +
+      Travail_accouchement_perID +
+      methode_conception_perID_cat_simple_mod +
+      
+      doul_abdo_avant_1_preg +
+      dysuria_avant_1_preg,
+    data = imputed_data_O3_perID[-c(17,316),],
+    family = binomial
+  )
+summary(mod_glm_multivariate_sensitivity)
+
+# 2. Compare the AIC of two differents model for the sensitivity analysis 
+AIC(mod_glm_multivariate_1, mod_glm_multivariate_sensitivity)
+# Sensitivity : 389.6878
+# Original model : 401.5950
+
+# 3. Compare the AUC of two models for the sensitivity analysis 
+library(pROC)
+# 3-1) Prepare the FULL DATASET model for ROC and AUC
+model_data <- na.omit(imputed_data_O3_perID)
+mod_glm_multivariate <-
+  glm(
+    total_complications_bin_perID ~
+      diplome_ini2 +
+      age +
+      
+      gynecologique_diseases +
+      infertilite_diag +
+      autoimmune_diseases +
+      metabolic_syndrome +
+      comorbidities_bin +
+      
+      endo_ade_categorie +
+      DIE +
+      age_firstOP_endoadeno_cat +
+      indic_ovaire_touche +
+      
+      age_regle_cat_simple +
+      age_symptome_cat +
+      
+      nb_live_births_all +
+      history_FC_preterm_IVGIMG_perID +
+      first_preg_age_cat +
+      Mode_accouchement_perID +
+      Travail_accouchement_perID +
+      methode_conception_perID_cat_simple_mod +
+      
+      doul_abdo_avant_1_preg +
+      dysuria_avant_1_preg,
+    data = model_data,
+    family = binomial
+  )
+prob <- predict(mod_glm_multivariate, type = "response")
+roc_full <- roc(response = model_data$total_complications_bin_perID, predictor = prob)
+
+# 3-2) Prepare the MODIFIED DATASET model for ROC and AUC
+mod_glm_multivariate_sensitivity <-
+  glm(
+    total_complications_bin_perID ~
+      diplome_ini2 +
+      age +
+      
+      gynecologique_diseases +
+      infertilite_diag +
+      autoimmune_diseases +
+      metabolic_syndrome +
+      comorbidities_bin +
+      
+      endo_ade_categorie +
+      DIE +
+      age_firstOP_endoadeno_cat +
+      indic_ovaire_touche +
+      
+      age_regle_cat_simple +
+      age_symptome_cat +
+      
+      nb_live_births_all +
+      history_FC_preterm_IVGIMG_perID +
+      first_preg_age_cat +
+      Mode_accouchement_perID +
+      Travail_accouchement_perID +
+      methode_conception_perID_cat_simple_mod +
+      
+      doul_abdo_avant_1_preg +
+      dysuria_avant_1_preg,
+    data = model_data[-c(17,316),],
+    family = binomial
+  )
+
+prob_sensitivity <- predict(mod_glm_multivariate_sensitivity, type = "response")
+roc_no_outlier <- roc(response = model_data[-c(17,316),]$total_complications_bin_perID, 
+                      predictor = prob_sensitivity)
+
+# 4. Compare 
+plot(roc_full, col="blue")
+plot(roc_no_outlier, add=TRUE, col="red")
+auc(roc_full) # 0.7908
+auc(roc_no_outlier) # 0.7894
+```
+
+
+#### * Final model 
+
+```{r}
+mod_glm_multivariate_final <- 
+  glm(total_complications_bin_perID ~
+        diplome_ini2+
+        age +
+        gynecologique_diseases +
+        infertilite_diag+
+        autoimmune_diseases+
+        metabolic_syndrome+
+        nb_mal_sansEndoAde_cat+
+        nb_live_births_all+
+        history_FC_preterm_IVGIMG_perID+
+        age_regle_cat_simple+
+        type_endo +
+        stade_dvpt_III_IV+
+        age_symptome_cat +
+        age_firstOP_endoadeno_cat+
+        Csection_perID+
+        indic_ovaire_touche+
+        methode_conception_perID_cat_simple_mod+
+        first_preg_age_cat+
+        doul_abdo_avant_1_preg,
+    data = imputed_data_O3_perID,
+    family = binomial
+  )
+
+#------------
+#  Results 
+#------------
+# 1) summary()
+summary(mod_glm_multivariate_final)
+
+# 2) tidy(exponentiate=TRUE) 
+library(tibble)
+res_multivar_glm <- tidy(mod_glm_multivariate_final, 
+                         exponentiate = TRUE, conf.int = 0.95) %>%
+  as.tibble()
+
+res_multivar_glm_final <- res_multivar_glm[, c("term", "estimate", "conf.low", "conf.high", "p.value")] %>%
+  mutate(across(c(estimate,conf.low, conf.high), ~ round(.x, 2)),
+         p.value= p.value %>% round(4))
+
+res_multivar_glm_final <- res_multivar_glm_final %>%
+  mutate(IC95 = paste0(conf.low, "–", conf.high)) %>% 
+  dplyr::select(term, estimate, IC95 , p.value,conf.low,conf.high)
+res_multivar_glm_mod
+```
+
+
+### 3) Visualization of results
+
+```{r}
+#------------
+#  gt table
+#------------
+library(gt)
+res_multivar_glm_final %>%
+  gt() %>%
+  tab_header(
+    title = md("**Multivariate Logistic Regression: **  
+    *Factors Associated with Live Birth*")
+  ) %>%
+  cols_label(
+    term = "Variables",
+    estimate = "Adjusted OR",
+    IC95 = "95% CI",
+    p.value = "p-value"
+  ) %>% 
+  fmt_markdown(columns = everything()) %>%
+  tab_options(
+    table.font.size = 12,
+    heading.title.font.size = 14,
+    heading.align = "left",
+    column_labels.font.weight = "bold",
+    table.border.top.color = "black",
+    table.border.bottom.color = "black",
+    row.striping.include_table_body = TRUE,
+    row.striping.background_color = "#f9f9f9"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = p.value,
+      rows = as.numeric(gsub("<", "", p.value)) < 0.05
+    )
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = term
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = c(IC95, p.value)
+  )
+
+#---------------
+#  Forest plot 
+#---------------
+res_multivar_glm_final$term <- 
+  factor(res_multivar_glm_final$term,
+         levels = rev(res_multivar_glm_final$term))
+
+ggplot(res_multivar_glm_final, aes(x = term, y = estimate)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray") +
+  coord_flip() +  
+  labs(
+    title = "Résultats du modèle de régression logistique multivariée",
+    x = NULL,
+    y = "OR (Odds Ratio avec IC 95%)"
+  ) +
+  theme_minimal()
+
+#------------------------------
+#  Forest plot with the ORs
+#------------------------------
+library(dotwhisker)
+library(grid)
+
+# 1. Limite the maximum conf.high for the forest plot  
+res_multivar_glm_final <- res_multivar_glm_final %>% 
+  mutate(conf.high_mod = 
+           ifelse(conf.high>9, 9.1, conf.high)) %>% 
+  dplyr:: select(-conf.high) %>% 
+  mutate(conf.high= conf.high_mod) %>% 
+  dplyr:: select(-conf.high_mod)
+
+# 2. Redefine the terms
+res_multivar_glm_final$term <- c(
+  "Intercept",
+  "High school diploma or less/Other vs Bac+2",
+  "High school diploma or less/Other vs >=Bac+3",
+  "Age",
+  "Gynecologic diseases: No vs Yes",
+  "Infertility diagnostic/treatement: No vs Yes",
+  "Autoimmune_diseases: No vs Yes",
+  "Metabolic syndrome: No vs Yes",
+  "Nb_comorbidity: 0 vs 1",
+  "0 vs 2+",
+  "Parity",
+  "History of misscarriage/preterm/IVGIMG: No vs Yes",
+  "age at menarche : <12 vs >=12",
+  "<12 vs unknown",
+  "type_endo: SPE only vs DIE only",
+  "SPE only vs OMA only",
+  "SPE only vs ADENO only",
+  "SPE only vs Multiple",
+  "SPE only vs Unknown",
+  "Endo III-IV stage: No vs Yes",
+  "Age at symptom onset : <=13 vs (13;15]",
+  "<=13 vs (15;22]",
+  "<=13 vs 22+",
+  "<=13 vs No symptom",
+  "Age at 1stOP: <27 vs 27-31",
+  "<27 vs 31>=",
+  "<27 vs No OP",
+  "C-section: No vs Yes",
+  "impacted/removed ovaries: No vs Yes",
+  "Conception Method: Natural vs Operation",
+  "Natural vs Operation+ART",
+  "Natural vs ART/Medicaments",
+  "Age_1stPregnancy: <30 vs 30-34",
+  "<30 vs >=34",
+  "Abdominal pain befor 1st preg : No vs Yes"
+)
+
+# 3. Create the plot 
+O3_1_forestplot <- dwplot(res_multivar_glm_final, show_intercept = TRUE) + 
+  geom_text(aes(x = 9.1, y = term, 
+                label = paste(estimate, "(", IC95, ")")),
+            hjust = -0.1, size = 3) +
+  theme_minimal() +
+  labs(title = "Results of Multivariate Logistic Regression",
+       x= "OR with 95% CI") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.2, size = 12, face = "bold"),
+    axis.title.x = element_text(hjust = 0.3, vjust = 0),
+    panel.grid = element_blank(),                
+    panel.background = element_blank(),           
+    axis.line.x =element_blank(), 
+    axis.line.y = element_blank(),                
+    axis.ticks = element_line(color = "black"),   
+    axis.text = element_text(color = "black")     
+  ) +
+  geom_linerange(aes(xmin = conf.low, xmax = conf.high, y = term),
+                 color = "red", size = 0.5, linetype=1)+
+  scale_x_continuous(breaks = seq(0, 9, 1)) +
+  coord_cartesian(xlim = c(0, 11), ylim = c(1, 37)) +
+  geom_segment(aes(x = 1, xend = 1, y = 0.8, yend = 37),
+               color = "black", size = 0.5)+
+  annotation_custom(
+    grob = textGrob("OR (95%CI)", 
+                    gp = gpar(fontsize = 10, col = "black",fontface = "bold")),
+    xmin = 8.5, ymin = 37) +
+  geom_segment(aes(x = -0.3, xend = 9, y = 0.5, yend = 0.5),  
+               color = "black", size = 0.5);O3_1_forestplot
+
+O3_1_forestplot
+
+# Save 
+#ggsave("C:/Stage_Master2/Stage_M2_Complic_Gross/O3_1_forestplot.jpg", O3_1_forestplot, width = 10, units = "in", dpi = 300)
+```
+
+
+#---------------------------------------------------------
+# II. Ordinal outcome 
+#---------------------------------------------------------
+
+## 1. Univariable analysis adjusted for age 
+### 1) Results Table 
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(gtsummary)
+library(purrr)
+library(MASS) # For polr
+library(brant) # Test 
+
+#----------------------
+# Define the data
+#----------------------
+data <- imputed_data_O3_perID %>%
+  dplyr::select(-total_complications_bin_perID) %>% 
+  mutate(across(where(~ is.factor(.) | is.character(.)), as.factor))
+
+#-----------------------------
+#  Data Preparation & Checks
+#-----------------------------
+# Ensure the outcome variable is an ordered factor
+data$total_complications_cat_perID <-
+  factor(data$total_complications_cat_perID,
+         levels = c("0", "1", "2+"), 
+         ordered = TRUE)
+
+data <- data %>% mutate(
+  nb_live_births_all_cat= ifelse(nb_live_births_all>=2,
+                                 "2+",nb_live_births_all) %>% as.factor()) 
+
+#---------------
+# Configuration
+#---------------
+# 1. Define your outcome and adjustment variables
+outcome_variable <- "total_complications_cat_perID"
+adjustment_variable <- "age" 
+
+# Identify predictor variables (excluding outcome and adjustment variable)
+predictor_variables <- setdiff(names(data), 
+                               c(outcome_variable, adjustment_variable))
+
+#-----------------------------------------------------------------
+# 1. Create Descriptive Statistics Table (Stratified by Outcome)
+#-----------------------------------------------------------------
+# This table shows N(%) or Mean (SD) for each predictor within each outcome group
+tbl_descriptive <- data %>%
+  dplyr::select(all_of(outcome_variable), all_of(predictor_variables)) %>%
+  tbl_summary(
+    by = all_of(outcome_variable),         # Stratify by the outcome
+    statistic = list(                     # Define stats for variable types
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no",
+    digits = list(all_continuous() ~ 1,
+                  all_categorical() ~ c(0, 1)) # Control digits
+  ) %>%
+  # add_p() %>%   # Optional: Add p-value for difference between groups
+  modify_header(label ~ "**Characteristic**") %>%
+  # Remove the overall column if you only want stratified stats (optional)
+  # remove_overall() %>%
+  bold_labels()
+
+print("Step 1: Descriptive Statistics Table Created.")
+# tbl_descriptive # Uncomment to view intermediate table
+
+#-------------------------------------------------------------
+# 2. Create Adjusted Multivariate Ordinal Regression Table
+#-------------------------------------------------------------
+# This function fits polr(outcome ~ predictor + ajusted variables ) and returns a gtsummary table row
+fit_adjusted_polr <- function(predictor, outcome_var, adjust_var, data) {
+  # Use backticks for safety with non-standard names and collapse adjustment variables
+  # adjust_str <- paste(sprintf("`%s`", adjustment_variable), collapse = " + ") # This was for a vector
+  # For a single adjustment variable, it's simpler:
+  adjust_str <- sprintf("`%s`", adjust_var) # If adjust_var is a single string
+
+  formula_str <- paste0("`", outcome_var, "` ~ `", predictor, "` + ", adjust_str)
+
+  # Fit the model
+  model <- tryCatch(
+    MASS::polr(as.formula(formula_str), data = data, Hess = TRUE), # Use polr from MASS, Hess=TRUE is crucial
+    error = function(e) {
+      warning(paste("Could not fit ordinal regression model for predictor:", predictor, "- Error:", conditionMessage(e)), call. = FALSE)
+      return(NULL) # Return NULL if model fails
+    }
+  )
+
+  # If model failed, return NULL
+  if (is.null(model)) return(NULL)
+
+  # Create a regression table, keeping only the row(s) for the main predictor
+  tbl_regression(model, exponentiate = TRUE, conf.int = TRUE) %>% # exponentiate = TRUE for Proportional OR
+    # Keep rows where 'variable' matches the predictor name
+    # This correctly handles factor variables which have multiple rows
+    modify_table_body(~ dplyr::filter(.x, variable == predictor))
+}
+
+# Apply the function to each predictor variable
+list_of_adj_tables <- map(predictor_variables,
+                          ~fit_adjusted_polr(.x, outcome_variable,
+                                             adjustment_variable,
+                                             data))
+
+# Remove any NULL results (from failed models)
+list_of_adj_tables <- list_of_adj_tables[!sapply(list_of_adj_tables,
+                                                 is.null)]
+
+# Stack the individual predictor tables into one
+if (length(list_of_adj_tables) > 0) {
+  tbl_adjusted_ors <- tbl_stack(list_of_adj_tables,
+                                group_header = NULL) %>%
+    modify_table_body(
+      ~ .x %>%
+        mutate(
+          est_ci = if_else(
+            !is.na(estimate),
+            sprintf("%.2f (%.2f, %.2f)", estimate, conf.low, conf.high),
+            NA_character_
+          )
+        )
+    ) %>%
+    modify_header(
+      label ~"**Characteristic**",
+      est_ci ~"**Adjusted Proportional OR (95% CI)**" # Clarify as Proportional OR
+    )
+  print("Step 2: Adjusted Proportional Odds Ratios Table Created.")
+} else {
+  warning("No successful ordinal regression models were fitted for adjusted ORs.",
+          call. = FALSE)
+  tbl_adjusted_ors <- NULL
+}
+
+#----------------------------------------------
+# 3. Merge Descriptive and Adjusted OR Tables
+#----------------------------------------------
+# The 'adjustment_variable' is a single string in this setup, so no paste collapse needed
+adjust_str <- adjustment_variable
+
+if (!is.null(tbl_adjusted_ors)) {
+    # Merge the two tables. gtsummary aligns rows based on the 'label' column.
+    tbl_final <- tbl_merge(
+      tbls = list(tbl_descriptive, tbl_adjusted_ors),
+      # Add spanners to differentiate the table sections
+      tab_spanner = c("**Descriptive Statistics by Outcome**",
+                      paste0("**Age-Adjusted Proportional Odds Model**")) # Update spanner for clarity
+    ) %>%
+      modify_caption(
+        paste0(
+          "**Multivariate Ordinal Logistic Regression Analysis for '",
+          outcome_variable,
+          "' (Adjusted for '", adjust_str, "')**")) # Update caption for clarity
+
+    print("Step 3: Merged Table Created.")
+
+    # --- Display the final table ---
+    tbl_final
+    } else {
+    print("Final merged table could not be created as the adjusted OR table is empty.")
+    print("Displaying only the descriptive statistics table:")
+    tbl_descriptive %>%
+        modify_caption(
+          paste0(
+            "**Descriptive Statistics for Predictors of '",
+            outcome_variable,"'**"))
+    }
+#tbl_final
+
+#------------------------------------------------------------
+# MERGED TABLE as tibble for the facility of coping results
+#------------------------------------------------------------
+O3_tab_2_univariable_final <- as_tibble(tbl_final) %>%
+  dplyr::select(-"**OR**",-"**95% CI**",-"**p-value**") # These columns might not exist or be named differently, adjust as needed based on tbl_final structure
+# Note: The column names like "**OR**", "**95% CI**", "**p-value**" might not be exact after using polr and gtsummary's custom formatting.
+# You might need to inspect `names(as_tibble(tbl_final))` to get the precise column names to exclude.
+
+
+O3_tab_2_univariable_final
+
+```
+
+*Results* 2025-06-02
+diplome_ini2 >=Bac+3 : 0.58 (0.35, 0.97)
+infertilite_diag : 	1.58 (1.04, 2.41)
+age_regle_cat_simple : >=12 (0.50 (0.31, 0.81)), nsp (0.39 (0.15, 0.97))
+stade_dvpt_III_IV : Oui 1.92 (1.10, 3.36)
+age_firstOP_endoadeno_cat 31>= : 2.51 (1.09, 5.88)
+nb_live_births_all: 1.64 (1.06, 2.53)
+history_FC_preterm_IVGIMG_perID : 1.98 (1.23, 3.20)
+
+Mode_accouchement_perID : only c-section 	2.13 (1.33, 3.42)
+VD_perID : 	0.48 (0.30, 0.76)
+Csection_perID : 	2.08 (1.32, 3.29)
+
+labour_natural_perID : 	0.65 (0.43, 0.99)
+doul_abdo_avant_1_preg : 1.90 (1.22, 2.98)
+
+
+#### - Porportional Odds Assumption (POA) Test
+Results : 
+	                                                     pval
+situation_financiereComfortable/Very comfortable 0.02654584
+age_regle_cat_simple>=12                         0.04952934
+type_endoOMA only                                0.03962746
+age_firstOP_endoadeno_cat31>=                    0.02924595
+age_firstOP_endoadeno_catNo operation            0.02520263
+nb_live_births_all                               0.01167016
+methode_conception_perID_cat_simple_modOperation 0.01624656
+
+
+```{r}
+library(purrr)
+library(MASS)
+library(brant)
+#-----------------------------------------
+#   PO TEST for each predictor variable
+#-----------------------------------------
+brant_results <- map(predictor_variables, function(pred) {
+  formula_str <- as.formula(paste0("total_complications_cat_perID ~ ", pred, " + age"))
+  model <- tryCatch(
+    polr(formula_str, data = data, Hess = TRUE),
+    error = function(e) return(NULL)
+  )
+  if (!is.null(model)) {
+    tryCatch(
+      brant(model),
+      error = function(e) return(NULL)
+    )
+  } else {
+    NULL
+  }
+})
+
+#
+result_list <- list()
+for (i in seq_along(brant_results)) {
+  pvals <- brant_results[[i]][, 3]
+  
+  # p < 0.05
+  significant_vars <- names(pvals)[pvals < 0.05 & names(pvals) != "Omnibus"]
+  significant_pvals <- pvals[pvals < 0.05 & names(pvals) != "Omnibus"]
+  
+  if (length(significant_vars) > 0) {
+    # save in the result_list
+    result_list[[i]] <- data.frame(pval = significant_pvals)
+  }
+}
+
+significant_vars_vector <- do.call(rbind, result_list); significant_vars_vector
+significant_vars_vector %>% View
+```
+
+## 2. Multivariable  Model and Results
+### 1) Model
+
+```{r}
+#-----------------------------
+#  Ordinal regression model
+#-----------------------------
+mod_polr_multivariate <-
+  polr(
+    total_complications_cat_perID  ~
+    diplome_ini2 + 
+    age + 
+    age_regle_cat_simple +
+    delai_diag_cat_simple + 
+    gynecologique_diseases +
+    infertilite_diag + 
+    autoimmune_diseases +
+    metabolic_syndrome + 
+    nb_mal_sansEndoAde_cat +
+    age_firstOP_endoadeno_cat + 
+    endo_ade_categorie+
+    DIE +
+    stade_dvpt_III_IV +
+    indic_ovaire_touche + 
+    trompe_anomalie +
+    nb_live_births_all_cat + 
+    history_FC_preterm_IVGIMG_perID +
+    first_preg_age_cat + 
+    conception_PMA_perID +
+    conception_operation_perID + 
+    Csection_perID +
+    labour_natural_perID +
+    doul_abdo_avant_1_preg,
+    
+    data = data,
+    Hess = TRUE
+  )
+
+#------------
+#  Results 
+#------------
+# 1) summary()
+summary(mod_polr_multivariate)
+tidy(mod_polr_multivariate, exponentiate = TRUE)
+
+res <- tidy(mod_polr_multivariate)
+ci <- confint.default(mod_polr_multivariate)
+ci_df <- as.data.frame(ci)
+colnames(ci_df) <- c("conf.low", "conf.high")
+ci_df$term <- rownames(ci_df)
+res2 <- res %>%
+  left_join(ci_df, by = "term")
+res_multivar_polr <- res2 %>%
+  mutate(
+    estimate = exp(estimate) %>% round(2),
+    conf.low = exp(conf.low) %>% round(2),
+    conf.high = exp(conf.high) %>% round(2)
+  ) %>% 
+  dplyr::select(-std.error,-statistic, -coef.type)
+
+#res_multivar_polr
+
+# 2) Result Table
+res_multivar_polr <- res_multivar_polr %>%
+  mutate(IC95 = paste0(conf.low, "–", conf.high)) %>% 
+  dplyr::select(term, estimate, IC95,conf.low,conf.high) 
+res_multivar_polr
+
+# Significants variables : 
+res_multivar_polr %>% filter(conf.low<1 & conf.high<1 | conf.high>1 & conf.low>1) 
+```
+
+#### - Assumptions check 
+- VIF
+- POA 
+Question : D'autres hypothèses à vérifier ?
+
+```{r}
+#---------------------------------------
+# Linearity and Independence of Errors
+#---------------------------------------
+# ???
+
+#------------------------------------
+#     Multicollinearity Check : <2
+#------------------------------------
+library(car)
+glm_proxy <- glm(
+  as.numeric(total_complications_cat_perID) ~
+    diplome_ini2 + 
+    age + 
+    age_regle_cat_simple +
+    delai_diag_cat_simple + 
+    
+    gynecologique_diseases +
+    infertilite_diag + 
+    autoimmune_diseases +
+    metabolic_syndrome + 
+    nb_mal_sansEndoAde_cat +
+    
+    age_firstOP_endoadeno_cat + 
+    endo_ade_categorie+
+    DIE +
+    stade_dvpt_III_IV +
+    indic_ovaire_touche + 
+    trompe_anomalie +
+    
+    nb_live_births_all_cat + 
+    history_FC_preterm_IVGIMG_perID +
+    first_preg_age_cat + 
+    
+    conception_PMA_perID +
+    conception_operation_perID + 
+    
+    Csection_perID +
+    labour_natural_perID +
+    
+    doul_abdo_avant_1_preg,
+  data = data
+)
+vif(glm_proxy) # all < 2
+
+
+
+#--------------------------------------
+# Proportional Odds Aussumption Test
+#--------------------------------------
+brant(mod_polr_multivariate)
+# Omnibus p-value >0.05
+# Question 
+# age_regle_cat_simple>=12			p-value=0.02 <0.05
+
+
+```
+
+### 2) Final model
+
+Question 
+
+```{r}
+library(VGAM) 
+library(purrr)
+
+#-------------------------------------------
+#  VGAM : Partial Proportional Odds Model  
+# - cumulative logit model
+#-------------------------------------------
+# In general, the proportional odds assumption is required in ordinal logistic regression. However, for some variables that do not satisfy this assumption, you can set `parallel = FALSE` for those specific variables, using `parallel = FALSE ~ variable_name`, to treat them as exceptions.
+# parallel = FALSE ~ age_regle_cat_simple => light proportional odds assumption, meaning that different coefficients are allowed for each cutoff point
+
+mod_vglm_multivariate <- vglm(
+  total_complications_cat_perID ~
+    diplome_ini2 +
+    age +
+    age_regle_cat_simple+ 
+    delai_diag_cat_simple +
+    gynecologique_diseases +
+    infertilite_diag +
+    autoimmune_diseases +
+    metabolic_syndrome +
+    nb_mal_sansEndoAde_cat +
+    age_firstOP_endoadeno_cat +
+    endo_ade_categorie +
+    DIE +
+    stade_dvpt_III_IV +
+    indic_ovaire_touche +
+    trompe_anomalie +
+    nb_live_births_all_cat +
+    history_FC_preterm_IVGIMG_perID +
+    first_preg_age_cat +
+    conception_PMA_perID +
+    conception_operation_perID +
+    Csection_perID +
+    labour_natural_perID +
+    doul_abdo_avant_1_preg,
+  family = cumulative(link = "logitlink",
+                      parallel = FALSE ~ age_regle_cat_simple), 
+  data = data,
+  crit = "coefs"
+)
+
+summary(mod_vglm_multivariate)
+
+##################
+#  모델 해석법
+##################
+# (1) Coefficients (계수) 해석
+# Estimate는 로짓 (log odds) 변화량을 의미해요.
+# - 양수면 그 변수 값이 커질수록 (0<1<+2) 높은 카테고리에 속할 확률이 높아지고, 음수면 그 반대입니다.
+# Ex ) 
+# diplome_ini2>=Bac+3의 Estimate는 0.639로, exp(0.639)=1.89이니까,
+# Bac+3 이상 학력이면 복합 합병증 카테고리가 높아질 (더 나쁠) 확률이 약 1.89배 증가한다고 해석 가능해요.
+# doul_abdo_avant_1_pregOui (임신 전 복통 있음) 의 Estimate는 -0.78, exp(-0.78) ≈ 0.46 복통이 있으면 더 높은 합병증 카테고리에 속할 확률이 낮아진다고 해석 가능하네요.
+# 
+# (2) 병렬성 가정을 깬 변수 해석
+# age_regle_cat_simple 변수는 병렬성 가정을 깼기 때문에 각 카테고리 구간(1, 2)마다 다른 효과가 있음.
+# age_regle_cat_simple>=12:1과 age_regle_cat_simple>=12:2를 따로 해석해야 해요.
+
+#------------
+#  Results 
+#------------
+# 1) summary()
+summary(mod_vglm_multivariate)
+
+# 2) Result Table
+library(tibble)
+
+coef_mat <- coef(summary(mod_vglm_multivariate))
+res_multivar_vglm <- data.frame(
+  variable = rownames(coef_mat),
+  estimate = coef_mat[, "Estimate"],
+  se = coef_mat[, "Std. Error"]
+)
+res_multivar_vglm <- res_multivar_vglm %>%
+  mutate(
+    OR = round(exp(estimate),1),
+    conf.low = round(exp(estimate - 1.96 * se),2),
+    conf.high = round(exp(estimate + 1.96 * se),2)
+  )
+res_multivar_vglm <- res_multivar_vglm %>%
+  mutate(IC95 = paste0(conf.low, "–", conf.high)) %>%
+  dplyr::select(variable, OR, IC95, conf.low, conf.high)
+```
+
+### 3) Visualization of results
+
+```{r}
+#------------
+#  gt table
+#------------
+library(gt)
+res_multivar_vglm %>%
+  gt() %>%
+  tab_header(
+    title = md("**Multivariate Ordinal Regression:**\n
+    - Factors Associated with number of obstetric complications")
+  ) %>%
+  cols_label(
+    variable   = "Variables",
+    OR = "Adjusted OR",
+    IC95 = "95% CI"
+  ) %>% 
+  fmt_markdown(columns = everything()) %>%
+  tab_options(
+    table.font.size = 12,
+    heading.title.font.size = 14,
+    heading.align = "left",
+    column_labels.font.weight = "bold",
+    table.border.top.color = "black",
+    table.border.bottom.color = "black",
+    row.striping.include_table_body = TRUE,
+    row.striping.background_color = "#f9f9f9"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = OR,
+      rows = (conf.low > 1 & conf.high > 1) | (conf.low < 1 & conf.high < 1)
+    )
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = variable
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = c(IC95)
+  ) %>% 
+ cols_hide(columns = c(conf.low, conf.high))
+
+#---------------------------
+#   Simple Visualization 
+#---------------------------
+# 1) OR (IC95)
+res_multivar_vglm <- res_multivar_vglm %>%
+  filter(!grepl("\\(Intercept\\)", variable))
+
+# 2) Forest plot
+ggplot(res_multivar_vglm, aes(x = reorder(variable, OR), 
+                              y = ifelse(OR >4,NA,OR))) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = ifelse(conf.high>4,4,conf.high)), width = 0.2) +
+  coord_flip() +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(x = "Var", y = "OR(IC95)", title = "Influence per variable") +
+  theme_minimal()
+```
+
+```{r}
+#------------------------------
+#  Forest plot with the ORs
+#------------------------------
+library(dotwhisker)
+library(grid)
+library(ggplot)
+
+# 1. Limite the maximum conf.high for the forest plot  
+res_multivar_vglm <- res_multivar_vglm %>% 
+  mutate(conf.high_mod = 
+           ifelse(conf.high>11, 11.1, conf.high)) %>% 
+  dplyr:: select(-conf.high) %>% 
+  mutate(conf.high= conf.high_mod,
+         term=variable) %>% 
+  dplyr:: select(-conf.high_mod, -variable) 
+
+# 2. Remove intercept informations 
+res_multivar_vglm_mod <- res_multivar_vglm[-c(1,2),]
+
+# 3. Set the order of term values 
+res_multivar_vglm_mod$term <- factor(res_multivar_vglm_mod$term, 
+                                 levels = rev(res_multivar_vglm_mod$term))
+
+# 4. Create the forest plot 
+O3_2_forestplot <- ggplot(res_multivar_vglm_mod, aes(y = term, x = OR)) +
+  geom_point(color = "blue") +  # OR 점
+  geom_linerange(aes(xmin = conf.low, xmax = conf.high), 
+                 color = "red", size = 0.8) +  
+  geom_text(aes(x = 12.1, label = paste0(round(OR, 2), " (", IC95, ")")),
+            hjust = 0, size = 3) +
+  geom_vline(xintercept = 1, color = "black") +  # 기준선 OR=1
+  scale_x_continuous(breaks = seq(0, 11, 1), limits = c(0, 13)) +
+  coord_cartesian(ylim = c(0.5, length(levels(res_multivar_vglm_mod$term)) + 1.5),
+                  xlim= c(0,15)) +
+  theme_minimal() +
+  labs(title = "Results of Multivariate Logistic Regression",
+       x = "Odds Ratio (95% CI)",
+       y = NULL) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  ) + 
+  annotation_custom(
+    grob = textGrob("OR (IC95)", 
+                    gp = gpar(fontsize = 10, fontface = "bold")),
+    xmin = 13, xmax = 13, 
+    ymin = length(levels(res_multivar_vglm_mod$term)) + 1.3,  
+    ymax = length(levels(res_multivar_vglm_mod$term)) + 1.3
+  )
+O3_2_forestplot
+
+
+
+# 2. Redefine the terms
+# res_multivar_glm_mod$term <- c(
+#   "High school diploma or less/Other vs Bac+2",
+#   "High school diploma or less/Other vs >=Bac+3",
+#   "Age",
+#   "age at menarche : <12 vs >=12 : 0 vs 1",
+#   "<12 vs >=12 : 1 vs 2+",
+#   "<12 vs nsp : 0 vs 1",
+#   "<12 vs nsp : 1 vs 2+",
+#   "Delay diagnostic years :<8 vs 13+",
+#   "<8 vs 8-13",
+#   "<8 vs No symptom",
+#   "Gynecologic diseases: No vs Yes",
+#   "Infertility diagnostic/treatement: No vs Yes",
+#   "Autoimmune_diseases: No vs Yes",
+#   "Metabolic syndrome: No vs Yes",
+#   "Nb_comorbidity: 0 vs 1",
+#   "0 vs 2+",
+#   "Age at 1stOP: <27 vs 27-31",
+#   "<27 vs 31>=",
+#   "<27 vs No OP",
+#   "Category : only Endo vs only adeno",
+#   "only Endo vs Both",
+#   "DIE : No vs Yes",
+#   "Endo III-IV stage: No vs Yes",
+#   "impacted/removed ovaries: No vs Yes",
+#   "Anormal fallopian tube: No vs Yes",
+
+
+#   "History of misscarriage/preterm/IVGIMG: No vs Yes",
+#   "age at menarche : <12 vs >=12",
+#   "<12 vs unknown",
+#   "type_endo: SPE only vs DIE only",
+#   "SPE only vs OMA only",
+#   "SPE only vs ADENO only",
+#   "SPE only vs Multiple",
+#   "SPE only vs Unknown",
+
+#   "Age at symptom onset : <=13 vs (13;15]",
+#   "<=13 vs (15;22]",
+#   "<=13 vs 22+",
+#   "<=13 vs No symptom",
+
+#   "C-section: No vs Yes",
+
+
+#   "Conception Method: Natural vs Operation",
+#   "Natural vs Operation+ART",
+#   "Natural vs ART/Medicaments",
+#   "Age_1stPregnancy: <30 vs 30-34",
+#   "<30 vs >=34",
+#   "Abdominal pain befor 1st preg : No vs Yes"
+# )
+
+# 3. Create the plot 
+O3_2_forestplot <- dwplot(res_multivar_vglm, show_intercept = TRUE) + 
+  geom_text(aes(x = 9.1, y = term, 
+                label = paste(OR, "(", IC95, ")")),
+            hjust = -0.1, size = 3) +
+  theme_minimal() +
+  labs(title = "Results of Multivariate Logistic Regression",
+       x= "OR with 95% CI") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.2, size = 12, face = "bold"),
+    axis.title.x = element_text(hjust = 0.3, vjust = 0),
+    panel.grid = element_blank(),                
+    panel.background = element_blank(),           
+    axis.line.x =element_blank(), 
+    axis.line.y = element_blank(),                
+    axis.ticks = element_line(color = "black"),   
+    axis.text = element_text(color = "black")     
+  ) +
+  geom_linerange(aes(xmin = conf.low, xmax = conf.high, y = variable),
+                 color = "red", size = 0.5, linetype=1)+
+  scale_x_continuous(breaks = seq(0, 9, 1)) +
+  coord_cartesian(xlim = c(0, 11), ylim = c(1, 37)) +
+  geom_segment(aes(x = 1, xend = 1, y = 0.8, yend = 37),
+               color = "black", size = 0.5)+
+  annotation_custom(
+    grob = textGrob("OR (95%CI)", 
+                    gp = gpar(fontsize = 10, col = "black",fontface = "bold")),
+    xmin = 8.5, ymin = 37) +
+  geom_segment(aes(x = -0.3, xend = 9, y = 0.5, yend = 0.5),  
+               color = "black", size = 0.5);O3_2_forestplot
+
+O3_2_forestplot
+# Save 
+#ggsave("Stage_M2_Complic_Gross/O3_2_forestplot.jpg", O3_2_forestplot,height = plot_height, width = 7, units = "in", dpi = 300)
+```
+
+
+

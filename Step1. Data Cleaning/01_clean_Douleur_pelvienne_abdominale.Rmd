@@ -1,0 +1,517 @@
+---
+title: "01_clean_Douleur_pelvienne_abdominale"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Douleur_pelvienne_abdominale
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+# Endo_douleur_pelvic_abd <- read.csv("~/Projet/0.Data/complication_pop_QST_0463_20250226_doul_pel_abdo.csv",encoding = "latin1",colClasses = c(Sexe = "character"))
+
+Endo_douleur_pelvic_abd <-
+  read.csv("Stage_M2_Complic_Gross/Complic_pop_QST_0463_20250407_doul_pel_abdo.csv",
+           encoding = "latin1",
+           colClasses = c(Sexe = "character"))
+
+#---------------------------------
+#  Modify bizarre name of column 
+#---------------------------------
+# Colname 29 index is "VAR31" : I checked it manually 
+names(Endo_douleur_pelvic_abd)[29] <- "inter_sport_16"
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- Endo_douleur_pelvic_abd %>% 
+  sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(Endo_douleur_pelvic_abd))%>% as.vector(); index_col_NA # index of columns having only NA
+
+#--------------------------
+#  Pain score in numeric
+#--------------------------
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  mutate(across(starts_with(c("niv_severite",
+                              "niv_intensite")), 
+                ~ as.numeric(as.character(.))),
+         across(starts_with("Date"),
+                ~ as.Date(.,format="%d/%m/%Y")))
+```
+
+
+# I. Preprocessing Data
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  mutate(Endo_dysmenorrhea_abd_participated=ifelse(is.na(IdAction),
+                                                "Non","Oui"))
+
+#-------------------------------------------------
+# Mean dysmernorrhea score along the entire life
+#-------------------------------------------------
+library(dplyr)
+# 1. Create a temporary dataframe 
+# new_dataframe <- Endo_douleur_pelvic_abd %>%
+#   dplyr::select(id_unik, starts_with("niv_severite_doul_pelv_")) %>%
+#   dplyr::mutate(
+#     total_score = rowSums(select(
+#       ., starts_with("niv_severite_doul_pelv_")
+#     ), na.rm = TRUE),
+#     na_count = 5 - rowSums(is.na(select(
+#       ., starts_with("niv_severite_doul_pelv_")
+#     ))),
+#     mean_niv_severite_dysmernorrhea = total_score / na_count
+#   ) %>%
+#   dplyr::select(id_unik, mean_niv_severite_dysmernorrhea) 
+
+new_dataframe <- Endo_douleur_pelvic_abd %>%
+  dplyr::select(id_unik, starts_with("niv_severite_doul_pelv_")) %>%
+  dplyr::mutate(
+    total_score = rowSums(across(starts_with("niv_severite_doul_pelv_")), na.rm = TRUE),
+    na_count = rowSums(!is.na(across(starts_with("niv_severite_doul_pelv_")))),
+    mean_niv_severite_dysmernorrhea = total_score / na_count
+  ) %>%
+  dplyr::select(id_unik, mean_niv_severite_dysmernorrhea)
+
+
+# 2. Add a new categorical variables 
+quantiles <- new_dataframe$mean_niv_severite_dysmernorrhea %>% quantile(probs=c(1/3,2/3), na.rm=TRUE) %>% round()
+
+new_dataframe <- new_dataframe %>%
+  mutate(
+    mean_niv_severite_dysmernorrhea_cat =
+      case_when(
+        mean_niv_severite_dysmernorrhea < quantiles[[1]] ~
+          paste0("<", quantiles[1]),
+        mean_niv_severite_dysmernorrhea >= quantiles[[1]] &
+          mean_niv_severite_dysmernorrhea < quantiles[[2]] ~
+          paste0(quantiles[1], "-", quantiles[2]),
+        mean_niv_severite_dysmernorrhea >= quantiles[[2]] ~
+          paste0(">=", quantiles[2])
+      )
+  )
+
+# 3. Add a new variable to the main dataframe
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  left_join(new_dataframe, by="id_unik") 
+
+# 4. Modify the new variable by adding a 'No pain' modality 
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  mutate(
+    mean_niv_severite_dysmernorrhea_cat= 
+      case_when(
+        doul_pelvienne_regle=="Non" ~ "No pain",
+        TRUE ~ mean_niv_severite_dysmernorrhea_cat
+      )
+    )
+
+# 5. Delete the temporary dataframe and quantile information
+rm(new_dataframe);rm(quantiles)
+
+#-------------------------------------------------
+# Mean of the worst severity level of abdominal pain over the entire lifespan
+#-------------------------------------------------
+# 1. Create a temporary dataframe 
+new_dataframe <- Endo_douleur_pelvic_abd %>%
+  select(id_unik, starts_with("niv_intensite_doul_abdo_")) %>%
+  mutate(
+    total_score = rowSums(select(
+      ., starts_with("niv_intensite_doul_abdo_")
+    ), na.rm = TRUE),
+    na_count = 5 - rowSums(is.na(select(
+      ., starts_with("niv_intensite_doul_abdo_")
+    ))),
+    mean_niv_intensite_doul_abdo = total_score / na_count
+  ) %>%
+  select(id_unik, mean_niv_intensite_doul_abdo) 
+
+# 2. Add a new categorical variables 
+quantiles <- new_dataframe$mean_niv_intensite_doul_abdo %>% quantile(probs=c(1/3,2/3), na.rm=TRUE) %>% round()
+
+new_dataframe <- new_dataframe %>%
+  mutate(
+    mean_niv_intensite_doul_abdo_cat =
+      case_when(
+        mean_niv_intensite_doul_abdo < quantiles[[1]] ~
+          paste0("<", quantiles[1]),
+        mean_niv_intensite_doul_abdo >= quantiles[[1]] &
+          mean_niv_intensite_doul_abdo < quantiles[[2]] ~
+          paste0(quantiles[1], "-", quantiles[2]),
+        mean_niv_intensite_doul_abdo >= quantiles[[2]] ~
+          paste0(">=", quantiles[2])
+      )
+  )
+
+# 3. Add a new variable to the main dataframe
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 4. Modify the new variable by adding a 'No pain' modality 
+Endo_douleur_pelvic_abd <- Endo_douleur_pelvic_abd %>% 
+  mutate(
+    mean_niv_intensite_doul_abdo_cat= 
+      case_when(
+        douleur_abdo=="Non" ~ "No pain",
+        TRUE ~ mean_niv_intensite_doul_abdo_cat
+      )
+    )
+
+# 5. Delete the temporary dataframe 
+rm(new_dataframe); rm(quantiles)
+```
+
+# II. Final dataset
+## 1) Selection of variables
+```{r}
+Endo_douleur_pelvic_abd_final <-
+  Endo_douleur_pelvic_abd %>%
+  dplyr::select(
+    id_unik,
+    IdAction,
+    doul_pelvienne_regle,
+    regle_avant_15a,
+    periode2:periode5,
+    douleur_abdo,
+    doul_abdo_15a,
+    periode2_abdo:periode5_abdo,
+    
+    starts_with(c("niv_severite","niv_intensite")),
+    mean_niv_severite_dysmernorrhea_cat,
+    mean_niv_intensite_doul_abdo_cat,
+    DateValidation,
+    Endo_dysmenorrhea_abd_participated
+  ) %>% 
+  distinct() %>% 
+  mutate(across(
+    - c(id_unik, IdAction, DateValidation, starts_with("niv_")),
+    ~ case_when(is.na(IdAction) ~ "Not_answered", TRUE  ~ .)
+    )) %>%
+  dplyr::select(-IdAction)
+```
+
+## 2) Create a new variable
+```{r}
+#------------------------------------------------------------------
+# Experience of abdominal and dysmenorrhea before 1st pregnancy
+#------------------------------------------------------------------
+# 1. Create a temporary dataframe with certaine information of pregnancy module
+new_dataframe <- Endo_douleur_pelvic_abd_final %>% 
+  left_join(grossesse_mod_final %>% 
+              select(id_unik, merged_DateDebut,
+                     first_preg_age,grossesse_encours,
+                     Date_naissance),
+            by="id_unik")
+
+
+# 2. Create two new variables : 
+# - Experience of abdominal pain before first pregnancy
+# - Experience of dysmenorrhea before first pregnancy
+new_dataframe <- new_dataframe %>%
+  mutate(
+    first_preg_age = first_preg_age %>% round(),
+    age_inclusion = as.numeric(as.character((
+      DateValidation - Date_naissance
+    ) / 365)) %>%
+      round(),
+    #-----------------------------------------------------
+    # Experience of abdominal pain before first pregnancy
+    #-----------------------------------------------------
+    doul_abdo_avant_1_preg = case_when(
+      # No answer provided in the questionnaire
+      douleur_abdo == "Not_answered" ~ "Not_answered",
+      
+      # First pregnancy occurred after study inclusion
+      first_preg_age > age_inclusion &
+        douleur_abdo == "Oui" ~ "Oui",
+      first_preg_age > age_inclusion &
+        douleur_abdo == "Non" ~ "Non et nsp",
+      
+      # First pregnancy occurred before or at inclusion and no pain reported
+      first_preg_age <= age_inclusion &
+        douleur_abdo == "Non" ~ "Non et nsp",
+      
+      # First pregnancy before or at inclusion and before age 15
+      first_preg_age <= age_inclusion &
+        first_preg_age <= 15 ~ case_when(
+          doul_abdo_15a == "Oui" ~ "Oui",
+          doul_abdo_15a == "Non" ~ "Non et nsp",
+          doul_abdo_15a == "Je ne m'en souviens plus" ~ "Non et nsp"
+        ),
+      
+      # First pregnancy between 16–20 years old
+      between(first_preg_age, 16, 20) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (doul_abdo_15a == "Oui" | periode2_abdo == "Oui") ~ "Oui",
+        first_preg_age < age_inclusion &
+          doul_abdo_15a == "Non" & periode2_abdo == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Je ne m'en souviens plus" |
+              periode2_abdo == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      # First pregnancy between 21–30 years old
+      between(first_preg_age, 21, 30) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Oui" |
+              periode2_abdo == "Oui" | periode3_abdo == "Oui"
+          ) ~ "Oui",
+        first_preg_age <= age_inclusion &
+          doul_abdo_15a == "Non" &
+          periode2_abdo == "Non" & periode3_abdo == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Je ne m'en souviens plus" |
+              periode2_abdo == "Je ne m'en souviens plus" |
+              periode3_abdo == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      # First pregnancy between 31–40 years old
+      between(first_preg_age, 31, 40) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Oui" | periode2_abdo == "Oui" |
+              periode3_abdo == "Oui" | periode4_abdo == "Oui"
+          ) ~ "Oui",
+        first_preg_age <= age_inclusion &
+          doul_abdo_15a == "Non" & periode2_abdo == "Non" &
+          periode3_abdo == "Non" & periode4_abdo == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Je ne m'en souviens plus" |
+              periode2_abdo == "Je ne m'en souviens plus" |
+              periode3_abdo == "Je ne m'en souviens plus" |
+              periode4_abdo == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      # First pregnancy at or after age 41
+      first_preg_age >= 41 ~ case_when(
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Oui" | periode2_abdo == "Oui" |
+              periode3_abdo == "Oui" | periode4_abdo == "Oui" |
+              periode5_abdo == "Oui"
+          ) ~ "Oui",
+        first_preg_age <= age_inclusion &
+          doul_abdo_15a == "Non" & periode2_abdo == "Non" &
+          periode3_abdo == "Non" & periode4_abdo == "Non" &
+          periode5_abdo == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            doul_abdo_15a == "Je ne m'en souviens plus" |
+              periode2_abdo == "Je ne m'en souviens plus" |
+              periode3_abdo == "Je ne m'en souviens plus" |
+              periode4_abdo == "Je ne m'en souviens plus" |
+              periode5_abdo == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      TRUE ~ NA_character_
+    ),
+    #------------------------------------------------------
+    #  Experience of dysmenorrhea before first pregnancy
+    #------------------------------------------------------
+    dysmenorrhea_avant_1_preg = case_when(
+      # No answer provided
+      doul_pelvienne_regle == "Not_answered" ~ "Not_answered",
+      
+      # First pregnancy occurred after study inclusion
+      first_preg_age > age_inclusion &
+        doul_pelvienne_regle == "Oui" ~ "Oui",
+      first_preg_age > age_inclusion &
+        doul_pelvienne_regle == "Non" ~ "Non et nsp",
+      
+      # First pregnancy occurred before or at inclusion and no pain reported
+      first_preg_age <= age_inclusion &
+        doul_pelvienne_regle == "Non" ~ "Non et nsp",
+      
+      # First pregnancy before age 15
+      first_preg_age <= age_inclusion &
+        first_preg_age <= 15 ~ case_when(
+          regle_avant_15a == "Oui" ~ "Oui",
+          regle_avant_15a == "Non" ~ "Non et nsp",
+          regle_avant_15a == "Je ne m'en souviens plus" ~ "Non et nsp"
+        ),
+      
+      # First pregnancy between 16–20
+      between(first_preg_age, 16, 20) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (regle_avant_15a == "Oui" | periode2 == "Oui") ~ "Oui",
+        first_preg_age < age_inclusion &
+          regle_avant_15a == "Non" & periode2 == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            regle_avant_15a == "Je ne m'en souviens plus" |
+              periode2 == "Je ne m'en souviens plus"
+          ) ~ "nsp"
+      ),
+      
+      # First pregnancy between 21–30
+      between(first_preg_age, 21, 30) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (regle_avant_15a == "Oui" |
+             periode2 == "Oui" | periode3 == "Oui") ~ "Oui",
+        first_preg_age <= age_inclusion &
+          regle_avant_15a == "Non" &
+          periode2 == "Non" & periode3 == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            regle_avant_15a == "Je ne m'en souviens plus" |
+              periode2 == "Je ne m'en souviens plus" |
+              periode3 == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      # First pregnancy between 31–40
+      between(first_preg_age, 31, 40) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (
+            regle_avant_15a == "Oui" | periode2 == "Oui" |
+              periode3 == "Oui" | periode4 == "Oui"
+          ) ~ "Oui",
+        first_preg_age <= age_inclusion &
+          regle_avant_15a == "Non" & periode2 == "Non" &
+          periode3 == "Non" & periode4 == "Non" ~ "Non",
+        first_preg_age <= age_inclusion &
+          (
+            regle_avant_15a == "Je ne m'en souviens plus" |
+              periode2 == "Je ne m'en souviens plus" |
+              periode3 == "Je ne m'en souviens plus" |
+              periode4 == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      # First pregnancy at or after 41
+      first_preg_age >= 41 ~ case_when(
+        first_preg_age <= age_inclusion &
+          (
+            regle_avant_15a == "Oui" | periode2 == "Oui" |
+              periode3 == "Oui" | periode4 == "Oui" |
+              periode5 == "Oui"
+          ) ~ "Oui",
+        first_preg_age <= age_inclusion &
+          regle_avant_15a == "Non" & periode2 == "Non" &
+          periode3 == "Non" & periode4 == "Non" &
+          periode5 == "Non" ~ "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (
+            regle_avant_15a == "Je ne m'en souviens plus" |
+              periode2 == "Je ne m'en souviens plus" |
+              periode3 == "Je ne m'en souviens plus" |
+              periode4 == "Je ne m'en souviens plus" |
+              periode5 == "Je ne m'en souviens plus"
+          ) ~ "Non et nsp"
+      ),
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+
+##################
+# TEST
+new_dataframe <- new_dataframe %>% 
+  mutate(
+  first_preg_age_cat =
+    case_when(
+      first_preg_age < 16 ~ "<16",
+      first_preg_age >=16 & first_preg_age <21 ~"16-20",
+      first_preg_age >=21 & first_preg_age <31 ~ "21-30",
+      first_preg_age >=31 & first_preg_age <41 ~ "31-40",
+      first_preg_age >=41 ~ "41+",
+      TRUE ~ NA_character_
+    ),
+  
+  
+  
+  )
+###################
+
+
+
+
+# 3. Add the new variables to the main dataframe
+Endo_douleur_pelvic_abd_final <- 
+  Endo_douleur_pelvic_abd_final %>%
+  left_join(
+    new_dataframe %>%
+      select(
+        id_unik,
+        doul_abdo_avant_1_preg,
+        dysmenorrhea_avant_1_preg
+      ),
+    by = "id_unik"
+  )
+
+# 4. Delete unnecessary variables
+Endo_douleur_pelvic_abd_final <- 
+  Endo_douleur_pelvic_abd_final %>%
+  select(-starts_with("periode"),
+         -DateValidation,
+         -regle_avant_15a,
+         -doul_abdo_15a)
+
+# 5. Delete the temporary dataframe 
+rm(new_dataframe)
+```
+
+```{r}
+Endo_douleur_pelvic_abd_final%>%glimpse
+```
+
+
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(Endo_douleur_pelvic_abd_final,"Stage_M2_Complic_Gross/Endo_douleur_pelvic_abd_final.csv")
+```
+

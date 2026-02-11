@@ -1,0 +1,127 @@
+---
+title: "01_clean_Treatment_burden"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Treatment_burden
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+- Les résultats concernant "le fardeau du traitement" des 2400 premiers participants à ComPaRe ont été décrits dans  une publication dans la revue Mayo Clinic Proceedings en octobre 2019 (en anglais).
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+fardeau_trt <- read.csv(
+  "Complic_pop_Fardeau_trt_20250407.csv",
+  encoding = "latin1",
+  colClasses = c(Sexe = "character")
+)
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+fardeau_trt <- fardeau_trt %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- fardeau_trt %>% 
+  sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count == nrow(fardeau_trt)) %>%
+  as.vector() # index of columns having only NA
+```
+
+
+# I. Preprocessing Data
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+fardeau_trt <- fardeau_trt %>% 
+  mutate(fardeau_trt_participated= ifelse(is.na(IdAction),
+                                         "Non","Oui"))
+#-------------------------
+#  Character to numeric
+#-------------------------
+fardeau_trt <-  fardeau_trt %>% 
+  mutate(sc_TBQ= sc_TBQ %>% as.numeric())
+
+#----------------------------------
+# Score : numeric -> categorical
+#----------------------------------
+# 1. Calculate quantiles
+quantiles_TBQ <- quantile(fardeau_trt$sc_TBQ, 
+                          probs = c(1/3, 2/3), na.rm=TRUE)
+
+# 2. Create new categorical variables 
+fardeau_trt <- fardeau_trt %>% 
+  mutate(
+    sc_TBQ_cat= 
+      case_when(
+        sc_TBQ< quantiles_TBQ[[1]] ~ 
+          paste0("<", round(quantiles_TBQ[1], 2)),
+        sc_TBQ>= quantiles_TBQ[[1]] & sc_TBQ< quantiles_TBQ[[2]] ~
+          paste0(round(quantiles_TBQ[1], 2), "-", round(quantiles_TBQ[2], 2)),
+        sc_TBQ>= quantiles_TBQ[[2]] ~ 
+          paste0(">=", round(quantiles_TBQ[2], 2))
+          ) %>% 
+      as.factor()
+    )
+
+# 3. Remove the quantiles data
+rm(quantiles_TBQ)
+```
+
+# II. Final Dataset
+
+```{r}
+fardeau_trt_final <- fardeau_trt %>% 
+  distinct(id_unik,
+           IdAction,
+           sc_TBQ_cat, 
+           fardeau_trt_participated) %>% 
+  mutate(sc_TBQ_cat = case_when(
+                    is.na(IdAction) ~ "Not_answered",
+                    TRUE  ~ sc_TBQ_cat
+                  )) %>%
+  select(-IdAction)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(fardeau_trt_final,"fardeau_trt_final.csv")
+```
+

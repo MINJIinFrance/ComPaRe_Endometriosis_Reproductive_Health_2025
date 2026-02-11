@@ -1,0 +1,806 @@
+---
+title: "01_clean_Endo_adeno_initial"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Endo_adeno_initial
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data for the initial information of endometriosis/adenomyosis 
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-06-02
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0.Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+# Endo_Adeno_initial <- read.csv("~/Projet/0.Data/complication_pop_QST_0418_20250226_endo_ade_init.csv",fileEncoding = "latin1",colClasses = c(Sexe = "character"))
+
+Endo_Adeno_initial <-
+  read.csv("Complic_pop_QST_0418_20250407_endo_adeno_init.csv",
+           fileEncoding = "latin1",
+           colClasses = c(Sexe = "character"))
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(across(everything(), ~na_if(trimws(.), "")))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- Endo_Adeno_initial %>% sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(Endo_Adeno_initial)) %>% as.vector() # index of columns having only NA
+Endo_Adeno_initial <- Endo_Adeno_initial[,-index_col_NA]
+```
+
+
+# I. Preprocessing Data
+
+## - Outlier 
+
+```{r}
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  mutate(across(starts_with(c("Age_","age_")), as.numeric))
+
+sapply(Endo_Adeno_initial %>% dplyr::select(starts_with("age_")), summary)
+
+# id_unik =="AFA16A96910CB83E7EC6"
+# - outlier : Age_endo = 4 years old
+
+# id_unik=="BE7A323B5380CE130080"
+# - outlier : age_diag_endo = 4 years old (age_symptome 16 years old))
+# - outlier : age_diag_adeno = 4 years old (age_symptome 16 years old))
+
+# id_unik=="C4F27F1D79FF7B37BF8A"
+# - outlier : age_symtome_adeno = 0 (id_unik=="C4F27F1D79FF7B37BF8A")
+# - outlier : age_symptom = 0 (id_unik == "4619847D44E1E3C0E021")
+```
+
+## - Create tnew variables 
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  mutate(Endo_Adeno_initial_participated=
+           ifelse(is.na(IdAction),"Non","Oui"))
+
+#---------------------------------
+# Family history of endometriosis : family_atcd_endo
+#---------------------------------
+# 1.dplyr::selecting and Cleaning Columns
+new_dataframe <- Endo_Adeno_initial %>%
+  dplyr::select(id_unik, starts_with("atcd_endo__")) %>%
+  mutate(across(starts_with("atcd_endo__"), str_trim))
+
+# 2.Creating a New Variable Based on Conditions
+# Non, Non applicable : pas d'atcd 
+new_dataframe$family_atcd_endo <-
+  apply(new_dataframe[, 1:ncol(new_dataframe)], 1, function(row) {
+    ifelse("Oui" %in% row,"Antécédents",
+           ifelse("Non" %in% row,"Pas d'antécédents",
+                  ifelse("Non applicable" %in% row, "Pas d'antécédents", NA)
+           ))
+  }) %>% as.factor()
+
+# 3.Merging the New Variable with the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, family_atcd_endo),
+            by = "id_unik")
+
+# 4.Removing unnecessary Columns 
+Endo_Adeno_initial <- Endo_Adeno_initial %>%  
+  dplyr::select(-starts_with("atcd_endo__"))
+
+# 5.Removing the Temporary new_dataframe
+rm(new_dataframe)
+
+#---------------------------------
+# Family history of adenomyosis
+#---------------------------------
+# 1.dplyr::selecting and Cleaning Columns
+new_dataframe <- Endo_Adeno_initial %>%
+  dplyr::select(id_unik, starts_with("atcd_adeno__")) %>%
+  mutate(across(starts_with("atcd_adeno__"), str_trim))
+
+# 2.Creating a New Variable Based on Conditions
+new_dataframe$family_atcd_adeno <- apply(new_dataframe[, 1:ncol(new_dataframe)], 1, function(row) {
+  ifelse("Oui" %in% row, "Antécédents", 
+         ifelse("Non" %in% row, "Pas d'antécédents",
+                ifelse("Non applicable"  %in% row, "Pas d'antécédents",NA)))
+  }) %>% as.factor()
+
+# 3.Merging the new variable with the original dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, family_atcd_adeno),
+            by = "id_unik")
+
+# 4.Removing unnecessary columns 
+Endo_Adeno_initial <- Endo_Adeno_initial %>%  
+  dplyr::select(-starts_with("atcd_adeno__"))
+
+# 5.Removing the Temporary new_dataframe
+rm(new_dataframe)
+
+
+#-----------------------------------
+# Family history of Endo or Adeno
+#-----------------------------------
+# 1. Create a temporary dataframe
+new_dataframe <- Endo_Adeno_initial %>% 
+  dplyr::select(id_unik,starts_with("family_atcd"))
+
+# 2. Make a new variable 
+new_dataframe <- new_dataframe %>% 
+  mutate(family_atcd_EndoAdeno=
+           case_when(
+             family_atcd_endo=="Antécédents"& family_atcd_adeno=="Antécédents" ~ 
+               "Both",
+             family_atcd_endo=="Antécédents"& family_atcd_adeno!="Antécédents"~ 
+               "Only endo",
+             family_atcd_endo!="Antécédents"& family_atcd_adeno=="Antécédents"~ 
+               "Only adeno",
+             family_atcd_endo=="Pas d'antécédents"& family_atcd_adeno=="Pas d'antécédents"~ 
+               "No family history",
+             !is.na(family_atcd_endo) & is.na(family_atcd_adeno) ~"Only endo",
+             is.na(family_atcd_endo) & !is.na(family_atcd_adeno) ~"Only adeno",
+             TRUE ~ NA_character_
+           ))
+
+# 3. Add this new variable to the main dataframe 
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik,family_atcd_EndoAdeno))
+
+#4. Delete the temporary dataframe 
+rm(new_dataframe)
+
+#--------------------------------
+# Family history of pelvic pain
+#--------------------------------
+new_dataframe <- Endo_Adeno_initial %>%
+  dplyr::select(id_unik, starts_with("douleur_pelvienne__")) %>%
+  mutate(across(starts_with("douleur_pelvienne__"), str_trim))
+
+new_dataframe$family_atcd_doul_pelv <-apply(new_dataframe[, 1:ncol(new_dataframe)], 1, function(row) {
+  ifelse("Oui" %in% row, "Antécédents", 
+         ifelse("Non" %in% row, "Pas d'antécédents",
+                ifelse("Non applicable"  %in% row, "Pas d'antécédents",NA)))
+  }) %>%  as.factor()
+
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, family_atcd_doul_pelv),
+            by = "id_unik")
+
+Endo_Adeno_initial <- Endo_Adeno_initial %>%  
+  dplyr::select(-starts_with("douleur_pelvienne__"))
+rm(new_dataframe)
+
+
+#----------------------------------------------------------------
+#  Symptoms that led to consultation before the first diagnosis (symptome_consult_)
+#----------------------------------------------------------------
+# 1. Convert All Columns to Character Format
+Endo_Adeno_initial[] <- lapply(Endo_Adeno_initial, as.character)
+
+# 2. Handle non standard encodings
+library(stringi) # advanced string manipulation functions
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(across(starts_with("symptome_consult_"), 
+                ~ stri_replace_all_fixed(., c("\u0092", "\u0085"), c("'", "…"), vectorize_all = FALSE))) 
+# \u0092 : a non-standard apostrophe, \u0085: an unusual line break character
+
+# 3. Replace "Autre" with "Autre ..."
+cols_modif_autre <- c("symptome_consult_1", "symptome_consult_2", "symptome_consult_3", "symptome_consult_4")
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(across(all_of(cols_modif_autre), ~ ifelse(. == "Autre", "Autre ...", .)))
+#Alternative approach
+# for (col in cols_modif_autre) {
+#   Endo_Adeno_initial[[col]][Endo_Adeno_initial[[col]] == "Autre"] <- "Autre ..."
+# }
+
+# 4. Define Symptom Categories
+#Here, I added a '\' before '(' due to an encoding issue; it might not work in your code, so you should #check
+infertil = "Infertilité \\(tentative de concevoir pendant au moins 12 mois consécutifs sans obtenir de grossesse, même incomplète\\)"
+douleur = "Douleurs \\(liées aux règles, lors des rapports sexuels, de l’évacuation d’urine ou de selles…\\)"
+autre_dig =  "Autres symptômes \\(symptômes digestifs…\\)"
+autre = "Autre ..."
+
+# 5. Create a New Data Frame with Logical Indicators
+new_dataframe <- Endo_Adeno_initial %>%
+  dplyr::select(id_unik, symptome_consult_1:symptome_consult_4) %>%
+  mutate(
+    infertil_logique = rowSums(across(starts_with("symptome_consult_"), ~grepl(infertil, .))) > 0,
+    douleur_logique = rowSums(across(starts_with("symptome_consult_"), ~ grepl(douleur, .))) > 0,
+    autre_dig_logique = rowSums(across(starts_with("symptome_consult_"), ~ grepl(autre_dig, .))) > 0,
+    autre_logique = rowSums(across(starts_with("symptome_consult_"), ~ grepl(autre, .))) > 0
+    ) %>% 
+# 6. Classify Symptoms 
+  mutate(
+    signe_symptome_premiere_consult = case_when(
+      douleur_logique & !(infertil_logique | autre_dig_logique | autre_logique) ~ "Pain",
+      autre_dig_logique & !(infertil_logique | douleur_logique | autre_logique) ~ "Other symptoms (digestive…)",
+      infertil_logique & !(autre_dig_logique | douleur_logique | autre_logique) ~ "Infertility",
+      autre_logique & !(autre_dig_logique | douleur_logique | infertil_logique) ~ "Other",
+      douleur_logique | infertil_logique | autre_dig_logique | autre_logique ~ "Multiple signs and symptoms",
+      TRUE ~ NA_character_)
+  )
+
+# 7. Merge the Classification Back into the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, signe_symptome_premiere_consult),
+            by = "id_unik")
+
+
+# 8. Remove new dataframe and variables symptome_conlsult_ from the original dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>%  
+  dplyr::select(-starts_with("symptome_consult_"))
+rm(new_dataframe)
+
+#------------------------------------------------------------------
+#   Create a variable that gives the age at the first diagnosis
+#------------------------------------------------------------------
+# 1. Convert all columns related to 'age' to numeric format 
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(across(starts_with("age_"),
+                ~as.numeric(gsub("[^0-9.-]", "",
+                                 as.character(.)))))
+
+# 2. p-min :  find the row-wise minimum across multiple vectors or columns
+Endo_Adeno_initial$Age_premier_diag_endo_ade <- 
+  do.call(pmin, #  row-wise minimum
+          c(Endo_Adeno_initial[, c("Age_endo", "age_diag_endo", "age_diag_adeno", "age_adeno", "age_diag_les2")], 
+            na.rm = TRUE))
+
+# 3. Create a categorical variable 
+quantiles <- quantile(Endo_Adeno_initial$Age_premier_diag_endo_ade, probs=c(1/3,2/3), na.rm=TRUE)
+
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  mutate(
+    Age_premier_diag_endo_ade_cat= 
+      case_when(
+        Age_premier_diag_endo_ade< quantiles[[1]] ~ 
+          paste0("<", quantiles[1]),
+        Age_premier_diag_endo_ade>= quantiles[[1]] &
+          Age_premier_diag_endo_ade< quantiles[[2]] ~
+          paste0(quantiles[1], "-", quantiles[2]),
+        Age_premier_diag_endo_ade>= quantiles[[2]] ~ 
+          paste0(">=", quantiles[2])
+      )
+  )
+
+# 4. Remove all variables related to the age of diagnosis sauf Age_premier_diag_endo_ade
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  dplyr::select(-age_diag_les2,-Age_endo,-age_diag_endo,-age_diag_adeno,-age_adeno)
+
+# 5. Delete the quantile information
+rm(quantiles)
+
+#-----------------------
+#   Diagnostic Delay    : numeric format and category format
+#-----------------------
+# Endo_Adeno_initial$age_symptome <- Endo_Adeno_initial$age_symptome %>% as.numeric()
+# Endo_Adeno_initial$Age_premier_diag_endo_ade <- Endo_Adeno_initial$Age_premier_diag_endo_ade %>% as.numeric()
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  mutate(delai_diag = 
+           Age_premier_diag_endo_ade - age_symptome)
+
+quantiles <- quantile(Endo_Adeno_initial$delai_diag, probs=c(1/3,2/3), na.rm=TRUE)
+
+#Endo_Adeno_initial$delai_diag=as.numeric(Endo_Adeno_initial$delai_diag)
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(delai_diag_cat = case_when(
+    delai_diag <= 5  ~ "<= 5",
+    delai_diag >5 & delai_diag <=10  ~ "(5;10]",
+    delai_diag >10 & delai_diag <=15 ~ "(10;15]",
+    delai_diag >=15 ~ "15+",
+    symptomes == "Non"  ~ "No symptoms",
+    TRUE ~ NA_character_) %>% 
+      factor(
+        levels=c("No symptoms","<= 5","(5;10]","(10;15]","15+"),
+        ordered = TRUE),
+    
+    delai_diag_cat_simple = case_when(
+      delai_diag <= 7  ~ "<= 7",
+      delai_diag > 7 & delai_diag <= 13  ~ "8-13",
+      delai_diag > 13 ~ "13+",
+      symptomes == "Non" ~ "No symptoms",
+      TRUE~ NA_character_
+      ) %>% 
+      factor(
+        levels=c("No symptoms","<= 7","8-13","13+"),
+        ordered = TRUE)
+  )
+
+#---------------------------
+# Age at the first symptom  : category format
+#---------------------------
+#quantile(Endo_Adeno_initial$age_symptome,probs = c(1/4,2/4,3/4),na.rm = TRUE)
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(age_symptome_cat = case_when(
+    age_symptome <= 13  ~ "<= 13",
+    age_symptome >13 & age_symptome <=15  ~ "(13;15]",
+    age_symptome >15 & age_symptome <=22 ~ "(15;22]",
+    age_symptome >22 ~ "22+",
+    symptomes == "Non"  ~ "No symptoms",
+    TRUE ~ NA_character_  )%>% 
+      factor(
+        levels=c("No symptoms","<= 13","(13;15]","(15;22]","22+"),
+        ordered = TRUE)
+  )
+
+#-------------------------
+#  Type of endometriosis
+#-------------------------
+# 1. Extracting Relevant Columns
+new_dataframe <-  Endo_Adeno_initial %>% 
+  dplyr::select(id_unik, starts_with("type_endo_"))
+
+# 2. Defining Patterns for Classification
+patterns <- list(
+  ADENO = "Une adénomyose",
+  OMA = "Une endométriose ovarienne \\(autres termes : endométriome, kyste endométriosique\\)",
+  SPE = "Une endométriose superficielle \\(autre terme : péritonéale\\)",
+  DIE  = "Une endométriose profonde",
+  NOP = "Aucun de ces termes ne m'a été mentionné",
+  NSP = "Je ne m'en souviens plus"
+)
+
+# 3. Creating Indicator Variables (Binary Encoding= TRUE 1/FALSE 0)
+for (var in names(patterns)) {
+  new_dataframe[[var]] <- rowSums(sapply(new_dataframe[, 2:5], grepl, pattern = patterns[[var]], ignore.case = TRUE), na.rm = TRUE) > 0
+}
+
+# 4. Classifying Endometriosis Types 
+new_dataframe <- new_dataframe %>%
+  mutate(
+    type_endo = case_when(
+      NOP ~ "Aucun mentionné/nsp",
+      NSP & !ADENO & !OMA & !DIE & !SPE ~ "Aucun mentionné/nsp", 
+      ADENO & !OMA & !DIE & !SPE ~ "ADENO only",
+      OMA & !DIE & !SPE ~ "OMA only",
+      DIE & !OMA & !SPE ~ "DIE only",
+      SPE & !OMA & !DIE ~ "SPE only",
+      (SPE + OMA + DIE + ADENO) > 1 ~ "Multiple types",  
+      TRUE ~ NA_character_
+    )
+  )
+
+# 5. Convert Indicator Variables to "Oui"/"Non" AFTER type_endo is created
+for (var in names(patterns)) {
+  new_dataframe[[var]] <- ifelse(new_dataframe[[var]], "Oui", "Non")
+}
+
+# 5. Merging Back to the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(-starts_with("type_endo_"),-NOP,-NSP), 
+            by = "id_unik")
+
+# 6. Removing all variables related to the type of endometriosis and the new dataframe
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  dplyr::select(-starts_with("type_endo_"))
+rm(new_dataframe)
+
+#-------------------------------------------------------
+# Rename columns : The number of professional consultants and the number of consultations before the diagnosis of endometriosis/adenomyosis
+categories <-
+  c(
+    "gyn",
+    "radio",
+    "GP",
+    "Gastro_E",
+    "chirDigest",
+    "uro",
+    "urgence",
+    "Sagefemmes",
+    "PMA",
+    "Autre"
+  )
+cols_to_rename <- grep("^nb_consult__", colnames(Endo_Adeno_initial), value = TRUE)
+
+if (length(cols_to_rename) == length(categories)) {
+  names(Endo_Adeno_initial)[names(Endo_Adeno_initial) %in% cols_to_rename] <-
+    paste0("nb_consult__", categories)
+} else {
+  stop("Le nombre de colonnes nb_consult__ ne correspond pas au nombre de catégories !")
+}
+cols_to_rename1 <- grep("^Nb_pro_consult__", colnames(Endo_Adeno_initial), value = TRUE)
+if (length(cols_to_rename) == length(categories)) {
+  names(Endo_Adeno_initial)[names(Endo_Adeno_initial) %in% cols_to_rename1] <-
+    paste0("Nb_pro_consult__", categories)
+} else {
+  stop("Le nombre de colonnes nb_consult__ ne correspond pas au nombre de catégories !")
+}
+
+# Modifie all columns starting "Nb_pro_" to numeric format
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(across(starts_with("Nb_pro_"), ~ as.numeric(gsub("[^0-9]", "", .))))
+
+#------------------------------------------------
+# Number of specialities consulted at least once
+#------------------------------------------------
+# 1. Extracting Relevant Columns
+new_dataframe <- Endo_Adeno_initial %>% 
+  dplyr::select(id_unik, starts_with("Nb_pro_consult__"))
+
+# 2. Number of specialities consulted at least once
+new_dataframe$Nb_specialites_consultees <- rowSums(new_dataframe[, -1] >= 1, na.rm = TRUE)
+
+# 3. Merging Back to the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, Nb_specialites_consultees),
+            by = "id_unik")
+
+#-------
+# CALCUL
+#-------
+# - Total number of professional consultants by specialty  
+# Convert all columns to numeric (handling potential character encoding issues)  
+new_dataframe[] <- lapply(new_dataframe, function(x) as.numeric(as.character(x)))
+
+# - Count the number of patients who consulted at least one professional in each specialty  
+nb_patients_par_specialite <- colSums(new_dataframe[, -1] >= 1, na.rm = TRUE); nb_patients_par_specialite
+
+# - Total number of consultations for each specialty  
+total_consultations_par_specialite <- colSums(new_dataframe[, -1], na.rm = TRUE); total_consultations_par_specialite
+
+# - Compute the average number of consultations per specialty, considering only patients who had at least one consultation  
+moyenne_consultations <- total_consultations_par_specialite / nb_patients_par_specialite ; moyenne_consultations
+
+total_patients <- nrow(new_dataframe); total_patients
+# - Percentage of patients with at least one visit in each specialty
+prop_patients_par_specialite <- nb_patients_par_specialite / total_patients;prop_patients_par_specialite
+
+# - Percentage of all patients have at least one visit in any specialty
+total_patients_with_any_consult <- sum(rowSums(new_dataframe[, -1], na.rm = TRUE) > 0)
+total_patients_with_any_consult / total_patients
+
+# 5. Removing the new dataframe
+rm(new_dataframe)
+
+#------------------------------------------------------------------
+# Catégories : the number of specialities consulted at least once
+#------------------------------------------------------------------
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  mutate(Nb_specialites_consult_cat = factor(
+    cut(Nb_specialites_consultees, 
+        breaks = quantile(Nb_specialites_consultees, probs = c(0, 0.25, 0.5, 0.75, 1), na.rm = TRUE),
+        include.lowest = TRUE,
+        labels = c("0-2", "2-3", "3-4", "4-10")
+    ),
+    ordered = TRUE
+  ))
+
+#----------------------------------------------------------------
+# Type de professionnels de santé consultés avant du diagnostics
+#----------------------------------------------------------------
+# 1.  Creating the new dataframe with variables of interest : Nb_pro_consult__
+new_dataframe <- Endo_Adeno_initial %>%
+  dplyr::select(id_unik, starts_with('Nb_pro_consult__')) %>%
+  mutate(
+    # Création d'une variable binaire pour chaque type de consultation
+    pro_gyn         = ifelse(Nb_pro_consult__gyn >= 1, 1, 0),
+    pro_radio       = ifelse(Nb_pro_consult__radio >= 1, 1, 0),
+    pro_GP          = ifelse(Nb_pro_consult__GP >= 1, 1, 0),
+    pro_Gastro_E    = ifelse(Nb_pro_consult__Gastro_E >= 1, 1, 0),
+    pro_chirDigest  = ifelse(Nb_pro_consult__chirDigest >= 1, 1, 0),
+    pro_uro         = ifelse(Nb_pro_consult__uro >= 1, 1, 0),
+    pro_urgence     = ifelse(Nb_pro_consult__urgence >= 1, 1, 0),
+    pro_Sagefemmes  = ifelse(Nb_pro_consult__Sagefemmes >= 1, 1, 0),
+    pro_PMA         = ifelse(Nb_pro_consult__PMA >= 1, 1, 0),
+    pro_Autre       = ifelse(Nb_pro_consult__Autre >= 1, 1, 0),
+    
+    # Nombre total de professionnels consultés
+    nb_pro_consultes = pro_gyn + pro_radio + pro_GP + pro_Gastro_E + pro_chirDigest +
+      pro_uro + pro_urgence + pro_Sagefemmes + pro_PMA + pro_Autre,
+    
+    type_pro_consult_avant_diag = case_when(
+      nb_pro_consultes == 0 ~ "Aucun",
+      nb_pro_consultes == 1 & pro_gyn == 1 ~ "Seulement Gyn",
+      nb_pro_consultes == 1 & pro_radio == 1 ~ "Seulement radio",
+      nb_pro_consultes == 1 & pro_GP == 1 ~ "Seulement GP",
+      nb_pro_consultes == 1 &
+        pro_Gastro_E == 1 ~ "Seulement Gastro",
+      nb_pro_consultes == 1 &
+        pro_chirDigest == 1 ~ "Seulement Chirurgien Digestif",
+      nb_pro_consultes == 1 & pro_uro == 1 ~ "Seulement Urologue",
+      nb_pro_consultes == 1 &
+        pro_urgence == 1 ~ "Seulement Urgence",
+      nb_pro_consultes == 1 &
+        pro_Sagefemmes == 1 ~ "Seulement Sage-femme",
+      nb_pro_consultes == 1 & pro_PMA == 1 ~ "Seulement PMA",
+      nb_pro_consultes == 1 & pro_Autre == 1 ~ "Seulement Autre",
+      nb_pro_consultes > 1 ~ "Multiples professionnels",
+      TRUE ~ NA_character_
+    )
+  )
+
+#new_dataframe$type_pro_consult_avant_diag %>% table(useNA = "a") 
+
+# 2. Merging Back to the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial%>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, type_pro_consult_avant_diag), 
+            by = "id_unik")
+
+# 3. Removing the new dataframe
+rm(new_dataframe)
+
+#---------------------------------
+#  Type of information sources    (info_suspect_)
+#---------------------------------
+# 1.  Create a new dataframe with columns of interest
+new_dataframe <- Endo_Adeno_initial %>% 
+  dplyr::select(id_unik, starts_with("info_suspect_"))
+
+# 2. Define information categories
+categories <- c("Dans les médias", "Sur internet", "Sur les réseaux sociaux", "Autre")
+
+# 3. Create a vector containing the names of the indicator variables
+indic_names <- c("info_media", "info_internet", "info_sns", "info_autre")
+
+# 4. Create indicator variables (0/1) for each type of information
+for (i in seq_along(categories)) {
+  new_dataframe[[indic_names[i]]] <- rowSums(sapply(
+    new_dataframe[, 2:5],
+    grepl,
+    pattern = categories[i],
+    ignore.case = TRUE
+  ),
+  na.rm = TRUE) > 0
+}
+
+# 5. Create a new categorical variable based on the number of sources used
+new_dataframe <- new_dataframe %>%
+  mutate(
+    type_info_source = case_when(
+      info_media    == 1 &
+        rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_media",
+      info_internet == 1 &
+        rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_internet",
+      info_sns      == 1 &
+        rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_sns",
+      info_autre    == 1 &
+        rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_autre",
+      rowSums(dplyr::select(., all_of(indic_names))) > 1 ~ "multiples_infos",
+      TRUE ~ NA_character_
+    )
+  )
+
+# 6. Merging Back to the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  left_join(new_dataframe %>% dplyr::select(id_unik, type_info_source),
+            by = "id_unik")
+
+# 7. Removing the new dataframe
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  dplyr::select(-starts_with("info_suspect_"))
+rm(new_dataframe)
+
+#---------------------------
+# elements of diagnostics   (element_diag_)               
+#---------------------------
+# 1. Sélectionner les colonnes des éléments de diagnostic
+new_dataframe <- Endo_Adeno_initial %>%
+  dplyr::select(id_unik, starts_with("element_diag_"))
+
+# 2. Define information categories
+categories <-
+  c("Autre",
+    "Echographie pelvienne",
+    "IRM",
+    "Opération chirurgicale",
+    "Symptômes")
+
+# 3. Create a vector containing the names of the indicator variables
+indic_names <-
+  c("diag_autre",
+    "diag_echo",
+    "diag_irm",
+    "diag_chirurgie",
+    "diag_symptomes")
+
+# 4. Create indicator variables (0/1) for each type of information
+for (i in seq_along(categories)) {
+  new_dataframe[[indic_names[i]]] <- rowSums(sapply(
+    new_dataframe[, 2:6],
+    grepl,
+    pattern = categories[i],
+    ignore.case = TRUE
+  ),
+  na.rm = TRUE) > 0
+}
+
+# 5. Create a new categorical variable
+new_dataframe <- new_dataframe %>%
+  mutate(
+    type_element_diag = case_when(
+      diag_echo== 1 & rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_echo",
+      diag_irm == 1 & rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_IRM",
+      diag_chirurgie == 1 & rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_chirurgie",
+      diag_symptomes== 1 & rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_symptom",
+      diag_autre == 1 & rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ "only_autre",
+      rowSums(dplyr::select(., all_of(indic_names))) > 1 ~ "multiples_ele_diag",
+      TRUE ~ NA_character_
+    )
+  )
+
+# 6. Merge Back to the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  left_join(new_dataframe %>% dplyr::select(id_unik, type_element_diag),
+            by = "id_unik")
+
+# 7. Removing the new dataframe and the orginal variables 
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  dplyr::select(-starts_with("element_diag_"))
+rm(new_dataframe)
+
+#---------------------------------------------------------------------
+# Evocation des maladies par un professionnel de santé avant le diagnostic (pro_parle_mal)
+#---------------------------------------------------------------------
+# 1. Sélectionner les colonnes des éléments de diagnostic
+new_dataframe <- Endo_Adeno_initial %>% 
+  dplyr::select(id_unik, starts_with("pro_parle_mal_"))
+
+# 2. Define information categories
+categories <-
+  c(
+    "Non",
+    "Autre",
+    "Chir_digestif",
+    "Gastro_e",
+    "Gyn",
+    "medecin_PMA",
+    "GP",
+    "Radio",
+    "Sage_femme",
+    "Uro",
+    "Urgences"
+  )
+
+# 3. Create a vector containing the names of the indicator variables
+indic_names <-
+  c(
+    "pro_non",
+    "pro_autre",
+    "pro_chir_digestif",
+    "pro_gastro",
+    "pro_gyn",
+    "pro_pma",
+    "pro_gp",
+    "pro_radio",
+    "pro_sagefemme",
+    "pro_uro",
+    "pro_urgence"
+  )
+
+# 4. Create indicator variables (0/1) for each type of information
+for (i in seq_along(categories)) {
+  new_dataframe[[indic_names[i]]] <- rowSums(sapply(
+    new_dataframe[, 2:ncol(new_dataframe)],
+    grepl,
+    pattern = categories[i],
+    ignore.case = TRUE
+  ),
+  na.rm = TRUE) > 0
+}
+
+# 5. Create a new categorical variable
+new_dataframe <- new_dataframe %>%
+  mutate(
+    type_pro_parle_mal = case_when(
+      rowSums(dplyr::select(., all_of(indic_names))) == 1 ~ paste0("only_", indic_names[max.col(dplyr::select(., all_of(indic_names)), ties.method = "first")]),
+      rowSums(dplyr::select(., all_of(indic_names))) > 1 ~ "multiples_pro",
+      TRUE ~ NA_character_
+    )
+  )
+
+# 6. Merge Back to the Original Dataset
+Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  left_join(new_dataframe %>% dplyr::select(id_unik, type_pro_parle_mal),
+            by = "id_unik")
+
+# 7. Removing the new dataframe and the orginal variables 
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  dplyr::select(-starts_with("pro_parle_mal_"))
+rm(new_dataframe)
+
+#---------------------------------------------------------------------
+# Evocation d’endométriose ou d’adénomyose par un professionnel de santé sans diagnostic (evok_maladie_ssdiag_1)
+#---------------------------------------------------------------------
+# strage...... but I ignore this information that I don't need for the analysis
+#Endo_Adeno_initial$evok_maladie_ssdiag_1 %>% table
+
+
+#-----------------------------------
+#  Family history of endometriosis
+#-----------------------------------
+Endo_Adeno_initial <- Endo_Adeno_initial %>% 
+  mutate(
+    family_atcd_EndoAdeno_cat =
+      case_when(
+        family_atcd_EndoAdeno %in% c("Both", "Only adeno", "Only endo") ~
+          "Antécédents",
+        family_atcd_EndoAdeno == "No family history" ~ "Pas d'antécédents",
+        TRUE~ NA_character_
+      )
+    )
+```
+
+
+# II. Final dataset
+
+```{r}
+Endo_Adeno_initial_final <- Endo_Adeno_initial %>%
+  dplyr::select(
+    id_unik,
+    IdAction,
+    
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+
+    age_symptome_cat,
+    signe_symptome_premiere_consult,
+    Age_premier_diag_endo_ade,
+    Age_premier_diag_endo_ade_cat,
+    
+    delai_diag,
+    delai_diag_cat,
+    delai_diag_cat_simple,
+    
+    type_endo,
+    ADENO,OMA,SPE,DIE,
+    #Nb_specialites_consultees,
+    Nb_specialites_consult_cat,
+    type_pro_consult_avant_diag,
+    type_info_source,
+    type_element_diag,
+    type_pro_parle_mal,
+    
+    Endo_Adeno_initial_participated)%>%
+  distinct() %>% 
+  
+  # Add the new modality 'Not_answered'
+  mutate(across(-c(id_unik, IdAction, delai_diag,Age_premier_diag_endo_ade),
+                ~ case_when(
+                  is.na(IdAction) ~ "Not_answered",
+                  TRUE ~ .
+    )
+  )) %>% 
+  dplyr::select(-IdAction)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+# update : 2025-06-02
+#write.csv(Endo_Adeno_initial_final,"Stage_M2_Complic_Gross/Endo_Adeno_initial_final.csv")
+```
+

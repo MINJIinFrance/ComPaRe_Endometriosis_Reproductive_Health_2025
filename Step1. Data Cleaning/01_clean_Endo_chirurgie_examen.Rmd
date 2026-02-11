@@ -1,0 +1,1180 @@
+---
+title: "01_clean_Endo_chirurgie_examen"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Endo_chirurgie_examen
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-03-05
+*Date of update* : 2025-05-15
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+Endo_parcours_chir_examens <- read.csv(
+  "Complic_pop_QST_0470_20250407_chirurgie_imagerie.csv",
+  encoding = "latin1",
+  colClasses = c(Sexe = "character")
+)
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim))
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- Endo_parcours_chir_examens %>% sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(Endo_parcours_chir_examens)) %>% as.vector() # index of columns having only NA
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens[,-index_col_NA]
+
+```
+
+# I. Preprocessing Data
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  mutate(Endo_chir_examens_participated=ifelse(is.na(IdAction),
+                                                "Non","Oui"))
+#--------------------------------
+# Reason for the first surgery
+#--------------------------------
+# 1. Selecting and Cleaning Columns
+new_dataframe <- Endo_parcours_chir_examens %>%
+  dplyr::select(id_unik,nb_operation_endo,starts_with("motif_operation"))
+
+# 2. create indicator variables for the reason for surgery
+categories <- c(
+  "Douleurs pelviennes",
+  "Confirmation de suspicion d'endométriose/adénomyose (diagnostic chirurgical)",
+  "Infertilité",
+  "Chirurgie pour une autre indication (découverte fortuite d'une endométriose/adénomyose)",
+  "Autre",
+  "Je ne sais pas"
+)
+
+indic_categories <- c(
+  "indic_motif_1_doul_pelv",
+  "indic_motif_1_confirm_diag",
+  "indic_motif_1_infertilite",
+  "indic_motif_1_chir",
+  "indic_motif_1_autre",
+  "indic_motif_1_nsp"
+)
+
+# 3. Create the function for the new variable
+variable_motif_operation1 <- function(nb_op, motif1, part) {
+  if (part %in% motif1) {
+    return("Opérée pour ce motif")
+  } else if (!is.na(nb_op) && nb_op == 0) {
+    return("N'a eu aucune opération")
+  } else {
+    if (!is.na(nb_op) && nb_op != 0) {
+      return("N'a pas été opérée pour ce motif")
+    } else {
+      return(NA)
+    }
+  }
+}
+
+# 4. Apply the function created
+new_dataframe[indic_categories] <- t(           # Transpose to ensure correct column-wise assignment
+  apply(new_dataframe, 1, function(row) {       # Apply function row-wise on new_dataframe
+  nb_op <- suppressWarnings(as.numeric(row[54])) # Convert to numeric to avoid errors
+  motif1 <- row[2:6]  # Select columns corresponding to the first operation motives
+  sapply(categories, function(part) variable_motif_operation1(nb_op, motif1, part))# Apply function to each category
+}))
+
+# 5. Create two new variables : Categorical and binary
+new_dataframe <- new_dataframe %>%
+  rowwise() %>%
+  mutate(
+    motifs_operation1 = 
+      list(na.omit(c_across(starts_with("motif_operation1_")))) ,
+    motifs_operation1_num = length(motifs_operation1),
+    motifs_operation1_cat = case_when(
+      nb_operation_endo == 0 ~ "pas d'OP",  
+      motifs_operation1_num == 1 ~ 
+        paste0("only_", first(motifs_operation1)),
+      motifs_operation1_num > 1 ~ "multiples motifs",
+      TRUE ~ NA_character_
+    ),
+    operation_endo_bin = case_when(
+      nb_operation_endo == 0 ~ 0,
+      nb_operation_endo >=1 ~ 1,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  ungroup()
+
+#--------------------------------------------
+#   Reason for more than second operation
+#--------------------------------------------
+# 1. Create indicator variables for the reason of the second operation and more
+categories <- c(
+  "Chirurgie incomplète lors d'une précédente intervention",
+  "Persistance des douleurs (les douleurs n'ont pas disparu suite à l’opération précédente)",
+  "Récidive des douleurs (réapparition des douleurs après une période sans douleur)",
+  "Apparition de nouvelles douleurs",
+  "Prise en charge d’une complication d’une précédente chirurgie pour endométriose/adénomyose",
+  "Infertilité",
+  "Autre"
+)
+indic_categories <- c("indic_motif_2_chir_inc",
+                      "indic_motif_2_doul_persist",
+                      "indic_motif_2_recidive",
+                      "indic_motif_2_nouv_doul",
+                      "indic_motif_2_complication",
+                      "indic_motif_2_infertilite",
+                      "indic_motif_2_autre"
+)
+
+# 2. Create the function 
+variable_motif_operationsup1 <- function(nb_op, motif2, part) {
+  if (part %in% motif2) {
+    return("Opérée pour ce motif")
+  } else if (!is.na(nb_op) && (nb_op == 0 || nb_op == 1)) {
+    return("A eu moins de 2 opérations")
+  } else if (!is.na(nb_op) && nb_op != 0 && nb_op != 1) {
+    return("N'a pas été opérée pour ce motif")
+  } else {
+    return(NA)
+  }
+}
+
+# 3. Apply the function to each column
+# Prepare the index of columns
+index_debut <- which(startsWith(names(new_dataframe), "motif_operation2")) %>% head(1)
+
+index_fin <- which(startsWith(names(new_dataframe), "motif_operation")) %>% tail(1)
+
+new_dataframe[indic_categories] <- t(apply(new_dataframe, 1, function(row) {
+  nb_op <- suppressWarnings(as.numeric(row[ncol(new_dataframe)]))
+  # Sélection des colonnes entre index_debut et index_fin
+  motif2 <- row[index_debut:index_fin]
+  # Appliquer la fonction pour chaque catégorie
+  sapply(categories, function(part) variable_motif_operationsup1(nb_op, motif2, part))
+}))
+
+# 4. Create new variables : categorical
+# Convertir les indices en noms de colonnes pour les utiliser avec all_of()
+colonnes_motif <- names(new_dataframe)[index_debut:index_fin]
+
+new_dataframe <- new_dataframe %>%
+  rowwise() %>%
+  mutate(
+    motifs_operation2 = list(na.omit(c_across(all_of(colonnes_motif)))),
+    motifs_operation2_num = length(motifs_operation2),
+    motifs_operation2_cat = case_when(
+      nb_operation_endo == 0 ~ "pas d'OP",
+      motifs_operation2_num == 1 ~ paste0("only_", first(motifs_operation2)),
+      motifs_operation2_num > 1 ~ "multiples motifs",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ungroup()
+
+
+# 5. Merge the new indicator into the main dataset
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  left_join(
+    new_dataframe %>% 
+      dplyr::select(id_unik,operation_endo_bin,motifs_operation1_cat,motifs_operation2_cat, starts_with("indic_motif_")),
+    by = "id_unik"
+  )
+
+# Remove the temporary dataset and certain variables 
+rm(new_dataframe)
+
+
+#------------------------------------------------------------------
+#   infertility an complication reason for 2nd ~6th operation
+#------------------------------------------------------------------
+motif_cols <- names(Endo_parcours_chir_examens) %>%
+  str_subset("^motif_operation[123456]_")
+
+new_df <- Endo_parcours_chir_examens %>%
+  dplyr::select(id_unik, nb_operation_endo, all_of(motif_cols))
+
+make_indicator <- function(motifs, target) {
+  if (is.null(motifs) || length(motifs) == 0 || all(is.na(motifs))) {
+    return(NA_character_)
+  } else if (target %in% motifs) {
+    return("Opérée pour ce motif")
+  } else {
+    return("N'a pas été opérée pour ce motif")
+  }
+}
+
+for (i in 1:6) {
+  motif_cols_i <- names(new_df)[str_detect(names(new_df), paste0("^motif_operation", i, "_"))]
+  
+  if (length(motif_cols_i) == 0) {
+    next  
+  }
+  
+  new_df <- new_df %>%
+    rowwise() %>%
+    mutate(
+      !!paste0("indic_motif_", i, "_infertilite") :=
+        make_indicator(c_across(all_of(motif_cols_i)), "Infertilité"),
+      
+      !!paste0("indic_motif_", i, "_complication") :=
+        make_indicator(c_across(all_of(motif_cols_i)), "Complication liée à la chirurgie")
+    ) %>%
+    ungroup()
+}
+
+new_df <- new_df %>% 
+  mutate(
+    indic_motif_2ndOP_infertilite = indic_motif_2_infertilite,
+    indic_motif_3rdOP_infertilite = indic_motif_3_infertilite,
+    indic_motif_4thOP_infertilite = indic_motif_4_infertilite,
+    indic_motif_5thOP_infertilite = indic_motif_5_infertilite,
+    indic_motif_6thOP_infertilite = indic_motif_6_infertilite,
+    
+    indic_motif_2ndOP_complication = indic_motif_2_complication,
+    indic_motif_3rdOP_complication = indic_motif_3_complication
+    
+  )%>%
+  dplyr::select(id_unik,
+                indic_motif_2ndOP_infertilite:indic_motif_6thOP_infertilite,
+                indic_motif_2ndOP_complication,indic_motif_3rdOP_complication)
+
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  left_join(new_df, by="id_unik")
+
+rm(new_df)
+
+
+#-------------------------------
+#   Duration of complications   : duree_complic_
+#-------------------------------
+# Recode complication duration by setting 0 for those who have no complication
+duration_cols <- c(
+  "duree_complic_vessie",
+  "duree_complic_autosondage",
+  "duree_complic_stomie",
+  "duree_complic_fistule",
+  "duree_complic_fistule_dig",
+  "duree_complic_constip",
+  "duree_complic_aug_doul",
+  "duree_complic_nvelle_douleur",
+  "duree_complic_autre_complication"
+)
+
+indicator_cols <-
+  c(
+    "vider_vessie",
+    "autosondage_urinaire",
+    "stomie_urinaire",
+    "fistule",
+    "fistule_dig",
+    "constipation",
+    "aug_douleur",
+    "app_nvelle_douleur",
+    "autre_complication"
+  )
+
+# Create new variables : tercile_duree_complic_XXX
+for (i in seq_along(duration_cols)) {
+  duration_col <- duration_cols[i]
+  indicator_col <- indicator_cols[i]
+  tercile_col <- paste0("tercile_", duration_col)
+  
+  # Calculate tercile thresholds
+  quantiles <- quantile(as.numeric(Endo_parcours_chir_examens[[duration_col]]), 
+                        probs = c(1/3, 2/3), na.rm = TRUE)
+  
+  Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+    mutate(!!tercile_col := ntile(!!sym(duration_col), 3)) %>% # Divide into 3 equal groups
+    mutate(!!tercile_col := if_else(
+      !!sym(indicator_col) == "Je n'ai jamais souffert de cette complication",
+      "N'a jamais souffert de cette complication",  
+      as.character(!!sym(tercile_col))
+    )) %>%
+    mutate(!!sym(tercile_col) := factor(
+      !!sym(tercile_col), 
+      levels = c("N'a jamais souffert de cette complication","1", "2", "3"), 
+      labels = c(
+        "N'a jamais souffert de cette complication",
+        paste0("<", round(quantiles[1], 2)), 
+        paste0(round(quantiles[1], 2), "-", round(quantiles[2], 2)), 
+        paste0(">", round(quantiles[2], 2))
+      )
+    , ordered = TRUE))
+}
+
+# Recreate 'tercile_duree_complic_autre_complication' by using autre_complication variable
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    tercile_duree_complic_autre_complication = as.character(ifelse(
+      autre_complication == "Je n'ai pas souffert d'autres complications",
+      "Pas de complication",
+      as.character(tercile_duree_complic_autre_complication)
+    )
+  ))
+
+# Remove all variables related duree_complic
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  dplyr::select(-starts_with("duree_complic"))
+
+#-------------------
+#  Ovary indicator
+#-------------------
+# 1. Selecting and Cleaning Columns
+new_dataframe <- Endo_parcours_chir_examens %>%
+  dplyr::select(id_unik,starts_with("ovaires_touches_"))
+
+# 2. create indicator variables 
+indic_categories <- c("indic_ovaire_touche")
+
+# 3. Create the function for the new variable 
+# Prepare the index of columns
+index_debut <- which(startsWith(names(new_dataframe), "ovaires_touches_")) %>% head(1)
+index_fin <- which(startsWith(names(new_dataframe), "ovaires_touches_")) %>% tail(1)
+variable_ovaire <- function(row) {
+  ovaire <- row[index_debut:index_fin]
+  case_when(
+    any(c("Oui, le gauche", "Oui, le droit") %in% ovaire) ~ 
+      "Ovaire touchée",
+    "Je ne sais pas" %in% ovaire ~ "Ne sait pas",
+    "Non" %in% ovaire ~ "Non touchée",
+    TRUE ~ NA_character_
+  )
+}
+
+# 4. Apply the function 
+new_dataframe$indic_ovaire_touche <- apply(new_dataframe, 1, function(row) { # 1= Row-wise
+  variable_ovaire(row)})
+
+# 5. Merge the new indicator into the main dataset
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  left_join(new_dataframe %>% dplyr::select(id_unik, indic_ovaire_touche),
+            by="id_unik")
+  
+# 6. Remove the temporary dataset and non-necessary variables 
+rm(new_dataframe)
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  dplyr::select(-starts_with("ovaires_touches_"))
+
+#------------------------------
+# Indicator of affected organ
+#------------------------------
+# 1. Select columns
+new_dataframe <- Endo_parcours_chir_examens %>% 
+  dplyr::select(id_unik, starts_with("organe_touche_"))
+
+# 2. create indicator variables 
+organes <- c(
+  "Trompe droite",
+  "Trompe gauche",
+  "Vagin",
+  "Utérus",
+  "Appareil digestif (iléon ou autre partie de l’intestin grêle, dernière anse iléale, cæcum, appendice, côlon, sigmoïde, charnière recto-sigmoïdienne, rectum, …)",
+  "Vessie",
+  "Rein(s)",
+  "Uretères",
+  "Ligaments utéro-sacrés (LUS)",
+  "Ligaments ronds",
+  "Diaphragme",
+  "Autre(s) organe(s) ou localisation plus précise"
+)
+
+indic_organes <-
+  c(
+    "indic_organe_touche_trompe_droite",
+    "indic_organe_touche_trompe_gauche",
+    "indic_organe_touche_vagin",
+    "indic_organe_touche_uterus",
+    "indic_organe_touche_dig",
+    "indic_organe_touche_vessie",
+    "indic_organe_touche_reins",
+    "indic_organe_touche_ureteres",
+    "indic_organe_touche_liga_utero",
+    "indic_organe_touche_liga_rond",
+    "indic_organe_touche_diaphragme",
+    "indic_organe_touche_autres"
+  )
+
+# 3. Create the function for the new variable 
+# Prepare the index of columns
+index_debut <- which(startsWith(names(new_dataframe), "organe_touche_")) %>% head(1)
+index_fin <- which(startsWith(names(new_dataframe), "organe_touche_")) %>% tail(1)
+
+variable_organe_touche <- function(row, part) {
+  organe <- row[index_debut:index_fin]
+  
+  if (part %in% organe) {
+    return("organe touché")
+  } else if ("Non" %in% organe) {
+    return("Aucun organe touché")
+  } else if (any(!is.na(organe))) {
+    return("A un autre organe touché ou nsp")
+  } else {
+    return(NA)
+  }
+}
+
+# 4. Apply the function 
+for (i in seq_along(organes)) {
+  part <- organes[i]
+  col_name <- indic_organes[i]
+  
+  new_dataframe[[col_name]] <- apply(new_dataframe, 1, function(row) {
+    variable_organe_touche(row, part)
+  })
+}
+
+# 5. Merge the new indicator into the main dataset
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  left_join(
+    new_dataframe %>% dplyr::select(-starts_with("organe_touche_")),
+    by = "id_unik"
+  )
+
+# 6. Remove the temporary dataset and non-necessary variables 
+rm(new_dataframe)
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  dplyr::select(-starts_with("organe_touche_"))
+
+#----------------------------
+#  Affected fallopian tube   : based on new Indicator of affected organ 
+#----------------------------
+# 1. Selecting and Cleaning Columns
+new_dataframe <- Endo_parcours_chir_examens %>% 
+  dplyr::select(id_unik, starts_with("indic_organe_touche_trompe_"))
+
+# 2. Create indicator variables
+trompe <-
+  c("indic_organe_touche_trompe_droite",
+    "indic_organe_touche_trompe_gauche")
+
+# 3. Create the function for the new variable
+# Prepare the index of columns
+index_debut <- which(startsWith(names(new_dataframe), "indic_organe_touche_trompe_")) %>% head(1)
+index_fin <- which(startsWith(names(new_dataframe), "indic_organe_touche_trompe_")) %>% tail(1)
+variable_trompe_touche <- function(row) {
+  trompe <- row[index_debut:index_fin]
+  
+  case_when(
+    "organe touché" %in% trompe ~ "organe touché",
+    "Aucun organe touché" %in% trompe ~ "Aucun organe touché",
+    "A un autre organe touché ou nsp" %in% trompe ~ "A un autre organe touché ou nsp",
+    TRUE ~ NA_character_
+  )
+}
+
+# 4. Apply the created function 
+new_dataframe$indic_organe_touche_trompe <- apply(new_dataframe, 1, function(row) {
+  variable_trompe_touche(row)
+})  
+
+# 5. Merge the new indicator into the main dataset
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  left_join(
+    new_dataframe %>% dplyr::select(id_unik,indic_organe_touche_trompe),
+    by = "id_unik"
+  )
+
+# 6. Remove the temporary dataset and non-necessary variables
+rm(new_dataframe)
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  dplyr::select(-starts_with("indic_organe_touche_trompe_"))
+
+#------------------
+#  adhesion level
+#------------------
+# 1. Select and clean columns
+new_dataframe <- Endo_parcours_chir_examens %>% 
+  dplyr::select(id_unik, starts_with("niveau_adherence_"), adherence)
+
+# 2. Create two new variables : numeric,Categorical(organes_enleves_cat) and binary(organes_enleves_bin)
+new_dataframe <- new_dataframe %>%
+  rowwise() %>%
+  mutate(
+    niveaux_adherences = 
+      list(na.omit(c_across(starts_with("niveau_adherence_")))) ,
+    niveaux_adherences_num = length(niveaux_adherences),
+    niveaux_adherences_cat = case_when(
+      adherence %in% c("Non", "Je ne sais pas") ~ "Non",  
+      adherence == "Oui" & niveaux_adherences_num == 1 ~ paste0("only_", first(niveaux_adherences)),
+      adherence == "Oui" & niveaux_adherences_num > 1 ~ "multiples adherences",
+      TRUE ~ NA_character_
+    ),
+    niveaux_adherences_bin = case_when(
+      adherence %in% c("Non", "Je ne sais pas") ~ 0,
+      adherence == "Oui" ~ 1,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  ungroup()
+
+
+# 2. Create indicator variables
+categories <- c(
+  "Des ovaires",
+  "Des trompes",
+  "Appareil digestif (iléon ou autre partie de l’intestin grêle, dernière anse iléale, cæcum, appendice, côlon, sigmoïde, charnière recto-sigmoïdienne, rectum, …)",
+  "Utérus",
+  "Vessie",
+  "Autre(s)"
+)
+indic_adhe <-
+  c(
+    "indic_adherence_ovaires",
+    "indic_adherence_trompes",
+    "indic_adherence_dig",
+    "indic_adherence_uterus",
+    "indic_adherence_vessie",
+    "indic_adherence_autres"
+  )
+
+# 3. Create the function for the new variable
+# Prepare the index of columns
+index_debut <- which(startsWith(names(new_dataframe), "niveau_adherence_")) %>% head(1)
+index_fin <- which(startsWith(names(new_dataframe), "niveau_adherence_")) %>% tail(1)
+variable_adherence<- function(row, part) {
+  adhe <- row[index_debut:index_fin] # index of variables related to the adhesion
+  case_when(
+    part %in% adhe ~ "Adhérence",
+    "Non" %in% adhe ~ "Aucune zone où présence d'adhérence",
+    any(!is.na(adhe))~ "A de l'adhérence ailleurs ou nsp",
+    TRUE ~ NA_character_
+  )
+}
+
+# 4. Apply the created function
+for (i in seq_along(categories)) {
+  part <- categories[i]
+  col_name <- indic_adhe[i]
+
+  new_dataframe[[col_name]] <- apply(new_dataframe, 1, function(row) {
+    variable_adherence(row, part)
+  })
+}
+
+# 5. Merge the new indicator into the main dataset
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  left_join(
+    new_dataframe %>% dplyr::select(id_unik,starts_with("indic_adherence_"),niveaux_adherences_cat,niveaux_adherences_bin),
+    by = "id_unik"
+  )
+
+# 6. Remove the temporary dataset and non-necessary variables
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  dplyr::select(-starts_with("niveau_adherence_"), -adherence)
+rm(new_dataframe)
+
+#-----------------
+#  Removed organ  : removed organ (numeric,categorical, binaire)
+#-----------------
+# 1. Select and clean columns
+new_dataframe <- Endo_parcours_chir_examens %>% 
+  dplyr::select(id_unik, starts_with("organes_enleves_"))
+
+# 2. Create two new variables : Categorical(organes_enleves_cat) and binary(organes_enleves_bin)
+new_dataframe <- new_dataframe %>%
+  rowwise() %>%
+  mutate(
+    organes_enleves = list(na.omit(c_across(starts_with("organes_enleves_")))) ,
+    organes_enleves_num = length(organes_enleves),
+    organe_enleve_cat = case_when(
+      organes_enleves_num == 0 ~ NA_character_,  
+      all(organes_enleves == "Non") ~ "Non",    
+      organes_enleves_num == 1 ~ paste0("only_", first(organes_enleves)),
+      organes_enleves_num > 1 & any(c("Un ovaire", "Une trompe", "Utérus", "Les deux ovaires", "Les deux trompes") %in% organes_enleves) ~ "multiples organes incluant ovaire/trompe/uterus",
+      organes_enleves_num > 1 & all(organes_enleves %in% c("Non", "Autre(s)")) ~ "only_Autre(s)",  
+      organes_enleves_num > 1 ~ "multiples organes hors de ovaire/trompe/uterus",
+      TRUE ~ NA_character_
+    ),
+    organe_enleve_bin = case_when(
+      organe_enleve_cat %in% c("Non", "only_Je ne sais pas") ~ 0,  
+      !is.na(organe_enleve_cat) ~ 1,
+      TRUE ~ NA_real_ 
+    )
+  ) %>%
+  ungroup() 
+
+# 3. Create indicator variables
+categories_suppression <- c(
+  "Un ovaire",
+  "Les deux ovaires",
+  "Une trompe",
+  "Les deux trompes",
+  "Utérus",
+  "Ligaments utéro-sacrés (LUS)",
+  "Intestin ou rectum",
+  "Vessie",
+  "Rein(s)",
+  "Uretère(s)",
+  "Autre(s)"
+)
+indic_suppression <-
+  c(
+    "indic_organe_enleve_1ovaire",
+    "indic_organe_enleve_2ovaires",
+    "indic_organe_enleve_1trompe",
+    "indic_organe_enleve_2trompes",
+    "indic_organe_enleve_uterus",
+    "indic_organe_enleve_liga_utero",
+    "indic_organe_enleve_intestin",
+    "indic_organe_enleve_vessie",
+    "indic_organe_enleve_rein",
+    "indic_organe_enleve_uretere",
+    "indic_organe_enleve_autre"
+  )
+
+# 4. Create the function for the new variable
+# Prepare the index of columns
+index_debut <- which(startsWith(names(new_dataframe), "organes_enleves_")) %>% head(1)
+index_fin <- which(startsWith(names(new_dataframe), "organes_enleves_")) %>% tail(1)
+variable_suppression <- function(row, part) {
+  enlevé <- row[index_debut:index_fin] # index of variables
+  case_when(
+    part %in% enlevé ~ "organe enlevé",
+    "Non" %in% enlevé ~ "Aucun organe enlevé",
+    any(!is.na(enlevé))~ "A un autre organe enlevé ou nsp",
+    TRUE ~ NA_character_
+  )
+}
+
+# 5. Apply the created function
+for (i in seq_along(categories_suppression)) {
+  part <- categories_suppression[i]
+  col_name <- indic_suppression[i]
+  new_dataframe[[col_name]] <- as.factor(apply(new_dataframe, 1, function(row) {
+    variable_suppression(row, part)
+  }))
+}
+
+# 6. Merge the new indicator into the main dataset
+ Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+   left_join(
+     new_dataframe %>% dplyr::select(-starts_with("organes_enleves")),
+     by="id_unik"
+   )
+
+# 7. Remove the temporary dataset and non-necessary variables
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  dplyr::select(-starts_with("organes_enleves_"))
+rm(new_dataframe)
+
+#-----------------------------
+#  Location of endometriosis
+#-----------------------------
+# 1. Select and clean columns
+new_dataframe <- Endo_parcours_chir_examens %>%
+  dplyr::select(id_unik, starts_with("localisation_endo_IRM_"))
+
+# 2. Regroup all variables and then create new variables 
+new_dataframe <- new_dataframe %>%
+  # Regroup all variable starting with 'localisation_endo_IRM_' : Ovaire, Trompes, Région pelvienne, Voies urinaires, Appareil digestif
+  mutate(across(
+    starts_with("localisation_endo_IRM_"),
+    ~ case_when(
+      is.na(.) ~ NA_character_,
+      . == "Non" ~ "Non",
+      . %in% c("Ovaire droit", "Ovaire gauche") ~ "Ovaire",
+      . %in% c("Trompe droite", "Trompe gauche") ~ "Trompes",
+      . %in% c("Utérus","Ligaments utéro-sacrés (LUS)","Ligaments ronds","Vagin","Cul-de-sac de Douglas") ~ "Région pelvienne",
+      . %in% c("Vessie", "Uretères", "Rein(s)") ~ "Voies urinaires",
+      . %in% c("Appareil digestif", "Rectum", "Colon", "Sigmoïde") ~ "Appareil digestif",
+      TRUE ~ "Autres"
+    )
+  )) %>%
+  rowwise() %>%
+  # Create a new variable by using categories created before : only... and ,multiple 
+  mutate(
+    unique_classes = list(na.omit(unique(
+      c_across(starts_with("localisation_endo_IRM_"))
+    ))),
+    num_localisation_endo = length(unlist(unique_classes)),
+    localisation_final = case_when(
+      all(is.na(unique_classes)) ~ NA_character_,
+      "Non" %in% unique_classes & num_localisation_endo == 1 ~ "Non",
+      "Non" %in% unique_classes & num_localisation_endo == 2 ~ paste0("only_", first(unlist(unique_classes))),
+      num_localisation_endo == 1 ~ paste0("only_", first(unlist(unique_classes))),
+      num_localisation_endo > 1 ~ "Multiple",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ungroup()
+
+# # 3. Create index
+# localisations <- c(
+#   "Ovaire droit",
+#   "Ovaire gauche",
+#   "Trompe droite",
+#   "Trompe gauche",
+#   "Utérus",
+#   "Vagin",
+#   "Cul-de-sac de Douglas",
+#   "Appareil digestif (iléon ou autre partie de l’intestin grêle, dernière anse iléale, cæcum, appendice, côlon, sigmoïde, charnière recto-sigmoïdienne, rectum, …)",
+#   "Paroi abdominale",
+#   "Vessie",
+#   "Uretères",
+#   "Rein(s)",
+#   "Ligaments utéro-sacrés (LUS)",
+#   "Ligaments ronds",
+#   "Diaphragme",
+#   "Autre(s) organe(s) ou localisation plus précise"
+# )
+# 
+# indic_cols <- c(
+#   "indic_IRM_loc_ovaired",
+#   "indic_IRM_loc_ovaireg",
+#   "indic_IRM_loc_tromped",
+#   "indic_IRM_loc_trompeg",
+#   "indic_IRM_loc_uterus",
+#   "indic_IRM_loc_vagin",
+#   "indic_IRM_loc_douglas",
+#   "indic_IRM_loc_dig",
+#   "indic_IRM_loc_abdo",
+#   "indic_IRM_loc_vessie",
+#   "indic_IRM_loc_ureteres",
+#   "indic_IRM_loc_rein",
+#   "indic_IRM_loc_liga_utero",
+#   "indic_IRM_loc_liga_rond",
+#   "indic_IRM_loc_diaph",
+#   "indic_IRM_loc_autre"
+# )
+# 
+# # 4. Make a function 
+# # Prepare index of columns
+# index_debut <- which(startsWith(names(new_dataframe), "localisation_endo_IRM_")) %>% head(1)
+# index_fin <- which(startsWith(names(new_dataframe), "localisation_endo_IRM_")) %>% tail(1)
+# 
+# variable_loc <- function(row, part) {
+#   loc <- row[index_debut:index_fin]
+#   loc_non <- row[index_debut+1:index_fin]
+#   if (part %in% loc) {
+#     return("Lésion")
+#   }
+# 
+#   has_value <- any(!is.na(loc))
+#   if ("Non" %in% loc && any(!is.na(loc_non))) {
+#     return("A des lésions autre part ou nsp")
+#   }
+#   if ("Non" %in% loc && !any(!is.na(loc_non))) {
+#     return("Aucune lésion sur le corps localisée")
+#   }
+#   if (has_value) {
+#     return("A des lésions autre part ou nsp")
+#   }
+#   return(NA)
+# }
+# 
+# 
+# # 5. Apply the function to each columns
+# for (i in seq_along(localisations)) {
+#   location <- localisations[i]
+#   col_name <- indic_cols[i]
+# 
+#   new_dataframe[[col_name]] <- as.factor(apply(new_dataframe, 1, function(row) {
+#     variable_loc(row, location)
+#   }))
+# }
+# 
+
+# 6. Merge 
+Endo_parcours_chir_examens=Endo_parcours_chir_examens %>%
+  left_join(new_dataframe %>% dplyr::select(id_unik,                          num_localisation_endo,localisation_final))
+
+# 7. Delete old variables and the temporary dataset 
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  dplyr::select(-starts_with("localisation_endo_IRM_"))
+rm(new_dataframe)
+
+# 8. Remodify the class of variable by considering 'Non'
+Endo_parcours_chir_examens <- 
+  Endo_parcours_chir_examens %>%
+  mutate(
+    num_localisation_endo =
+      case_when(
+        is.na(localisation_final) ~ NA_real_,
+        !is.na(localisation_final)& localisation_final=="Non" ~ 0,
+        !is.na(localisation_final)& localisation_final!="Non" ~
+          num_localisation_endo,
+        TRUE ~ NA_real_
+      ),
+
+    num_localisation_endo_cat = 
+      num_localisation_endo %>% as.numeric %>% 
+      cut(
+      breaks = c(-Inf, 1, 2, Inf),
+      labels = c("0-1", "2", "3 ou plus"),
+      right = TRUE,
+      ordered_result = TRUE
+    )
+  )
+
+#----------------------------------
+#  Maximum Size of cyst by IRM
+#-----------------------------------
+# 1. Create a new variable : maximum size of cyst among left and right side of cyst
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    taille_kyste_IRM_max =
+      pmax(taille_kyste_droit_IRM,taille_kyste_gauche_IRM,
+           na.rm = TRUE)
+  )
+
+#----------------------------------------
+# The way the ovaries are affected
+#----------------------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    ovaire_touches2 = case_when(
+      indic_ovaire_touche ==  NA ~ NA,
+      indic_ovaire_touche ==  "Non touchée" ~ "Non touchée",
+      indic_ovaire_touche == "Ovaire touchée" &
+        Ovaire_gauche == "De manière superficielle (c’est-à-dire sans kyste d’endométriose au niveau de l’ovaire)" ~ "Oui, superficielle",
+      indic_ovaire_touche == "Ovaire touchée" &
+        Ovaire_droit == "De manière superficielle (c’est-à-dire sans kyste d’endométriose au niveau de l’ovaire)" ~ "Oui, superficielle",
+      indic_ovaire_touche == "Ovaire touchée" &
+        Ovaire_gauche == "De manière profonde (c’est-à-dire avec un ou plusieurs kystes d’endométriose au niveau de l’ovaire)" ~ "Oui, profonde",
+      indic_ovaire_touche == "Ovaire touchée" &
+        Ovaire_droit == "De manière profonde (c’est-à-dire avec un ou plusieurs kystes d’endométriose au niveau de l’ovaire)" ~ "Oui, profonde",
+      indic_ovaire_touche == "Ovaire touchée" &
+        Ovaire_gauche == "Je ne sais pas" ~ "Oui, ne sais pas",
+      indic_ovaire_touche == "Ovaire touchée" &
+        Ovaire_droit == "Je ne sais pas" ~ "Oui, ne sais pas",
+      indic_ovaire_touche == "Ne sait pas" ~ "Ne sais pas",
+      TRUE ~ NA
+    )
+  )
+
+#---------------------
+# Cyst size tercile           
+#---------------------
+# 1. clean up the variable of cyst size with zero values 
+Endo_parcours_chir_examens  <- Endo_parcours_chir_examens  %>%
+  # taille_kyste_IRM_max : character to numeric
+  mutate(taille_kyste_IRM_max = taille_kyste_IRM_max %>% as.numeric()) %>%
+  # Create a new variable
+  mutate(taille_kyste_IRM2 =
+           ifelse((
+             ovaire_touches2 == "Non touchée" &
+               (is.na(taille_kyste_IRM_max) |
+                  taille_kyste_IRM_max == 0)
+           ) | taille_kyste_IRM_max == 0 ,
+           NA,
+           taille_kyste_IRM_max
+           ))
+
+
+# 2. Divide the variable of cyst size into three class
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(tercile_taille_kyste_IRM = ntile(taille_kyste_IRM2, 3))
+Endo_parcours_chir_examens$tercile_taille_kyste_IRM %>% table
+
+# 3. Add one more class "0" to the variable
+quantiles = quantile(Endo_parcours_chir_examens$taille_kyste_IRM2 ,
+                     probs = c(1 / 3, 2 / 3),
+                     na.rm = TRUE)
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    tercile_taille_kyste_IRM =
+      ifelse((
+        ovaire_touches2 == "Non touchée" &(is.na(taille_kyste_IRM_max) |taille_kyste_IRM_max == 0)) | taille_kyste_IRM_max == 0,"0",tercile_taille_kyste_IRM
+      ) %>%
+      factor(
+        levels = c("0", "1", "2", "3"), 
+        ordered = TRUE,
+        labels = c(
+          "Ovaire non touchée",
+          paste0("<", round(quantiles[1], 2)),
+          paste0(round(quantiles[1], 2), "-", round(quantiles[2], 2)),
+          paste0(">", round(quantiles[2], 2))
+        )
+      )
+  )
+
+#------------------------
+#   Cul de sac Douglas   
+#------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    cul_sac_Douglas2 = case_when(
+      cul_sac_Douglas == "Non" |cul_sac_Douglas == "Je ne sais pas" ~ cul_sac_Douglas,
+      cul_sac_Douglas == "Oui" & cul_sac_Douglas_touche == "Je ne sais pas" ~ "Oui, nsp le degré",
+      cul_sac_Douglas == "Oui" ~ cul_sac_Douglas_touche,
+      TRUE ~ NA_character_
+    )
+  )
+
+#------------------------------
+#    Blocked fallopian tube
+#------------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    trompe_touche2 = case_when(
+      indic_organe_touche_trompe == "organe touché"  &
+        (trompe_droite == "Oui" |trompe_gauche == "Oui") ~ "Complétement bouchée",
+      indic_organe_touche_trompe == "organe touché"  &
+        (trompe_droite == "Non" |trompe_gauche == "Non") ~ "Pas complétement bouchée",
+      indic_organe_touche_trompe == "organe touché"  &
+        (trompe_droite == "Je ne sais pas" |trompe_gauche == "Je ne sais pas") ~ "Ne sait pas si complétement bouchée",
+      indic_organe_touche_trompe == "A un autre organe touché ou nsp" |
+        indic_organe_touche_trompe == "Aucun organe touché" ~ "Trompe non touchée",
+      TRUE ~ NA_character_
+    ),
+    trompe_anomalie = ifelse(
+  trompe_touche2 %in% c("Complétement bouchée", 
+                        "Ne sait pas si complétement bouchée",
+                        "Pas complétement bouchée"),
+  "Oui",
+  ifelse(trompe_touche2 %in% c("Trompe non touchée", 
+                               "No surgery"), 
+         "Non", NA))
+  )
+
+#-----------------------------------------------------------
+# Number of affected organs and Number of removed organs
+#-----------------------------------------------------------
+# 1. Make a function for counting the number of affected organs
+compter_organes_touches <- function(df) {
+  # Identifier les colonnes qui commencent par "indic_organe_touche"
+  cols <- grep("^indic_organe_touche", names(df), value = TRUE)
+  
+  # Appliquer la fonction de comptage pour chaque ligne
+  df$nb_organe_touche <- rowSums(df[cols] == "organe touché")
+  
+  return(df)
+}
+
+# 2. Make a function for counting the number of affected organs
+compter_organes_enleve <- function(df) {
+  # Identifier les colonnes qui commencent par "indic_organe_touche"
+  cols <- grep("^indic_organe_enleve", names(df), value = TRUE)
+  
+  # Appliquer la fonction de comptage pour chaque ligne
+  df$nb_organe_enleve <- rowSums(df[cols] == "organe enlevé")
+  
+  return(df)
+}
+
+# 3. Apply two functions to the main dataset
+Endo_parcours_chir_examens <- compter_organes_touches(Endo_parcours_chir_examens)
+Endo_parcours_chir_examens <- compter_organes_enleve(Endo_parcours_chir_examens)
+
+# 4. Recode two variables (num of affected organs and removed organs into categorical)
+Endo_parcours_chir_examens <-  Endo_parcours_chir_examens %>%
+  mutate(
+    # Number of affected organs in binary variable
+    nb_organe_touche_bin =
+      case_when(nb_organe_touche >= 1 ~ "Oui", 
+                nb_organe_touche == 0 ~ "Non", 
+                TRUE ~ NA) %>% as.factor(),
+    
+    # Numer of removed organs in binary variable
+    nb_organe_enleve_bin =
+      case_when(nb_organe_enleve >= 1 ~ "Oui", 
+                nb_organe_enleve == 0 ~ "Non", 
+                TRUE ~ NA) %>%
+      as.factor(),
+    # Number of affected organs in categorical
+    nb_organe_touche_cat = 
+      cut(nb_organe_touche,
+          breaks = c(-Inf, 0, 2, Inf),
+          labels = c("0", "1-2", "3 ou plus"),
+          right = TRUE, 
+          ordered_result = TRUE),
+    # Number of removed organs in categorical
+    nb_organe_enleve_cat = factor(
+      nb_organe_enleve,
+      levels = c("0", "1", "2", "3", "4", "5"),
+      ordered = TRUE
+    )
+  )
+
+#-------------------------------------
+#  Number of endometriosis operation
+#-------------------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>% 
+  # character to numeric
+  mutate(nb_operation_endo= as.numeric(nb_operation_endo)) %>% 
+  mutate(
+    # Number of endometriosis operation into binary variable
+    nb_operation_endo_cat= 
+      case_when(
+        nb_operation_endo > 1 ~ ">1",
+        nb_operation_endo == 1 ~ "1",
+        nb_operation_endo == 0 ~ "0",
+        TRUE ~ NA 
+        ) %>% factor(levels = c("0","1",">1"),ordered = TRUE),
+    # Number of endometriosis operation into categorical
+    nb_operation_endo_cat2= 
+      case_when(
+        nb_operation_endo >2 ~ ">2",
+        nb_operation_endo == 2 ~ "2",
+        nb_operation_endo == 1 ~ "1",
+        nb_operation_endo==0 ~ "0",
+        TRUE ~ NA 
+        ) %>% factor(levels=c("0","1","2",">2"), 
+                     ordered = TRUE)
+    )
+
+#------------------------------
+#   Stade of endometriosis 
+#------------------------------
+Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  mutate(
+    stade_dvpt_maladie =
+      factor(
+        stade_dvpt_maladie,
+        levels = c(
+          "Non",
+          "Je ne sais pas",
+          "Stade I",
+          "Stade II",
+          "Stade III",
+          "Stade IV"
+        ),
+        ordered = TRUE
+      ),
+    
+    stade_dvpt_legere_severe =
+      case_when(
+        stade_dvpt_maladie %in% c("Stade I", "Stade II") ~ "I-II",
+        stade_dvpt_maladie %in% c("Stade III","Stade IV") ~ "III-IV",
+        stade_dvpt_maladie =="Non" ~ "Non et nsp",
+        stade_dvpt_maladie =="Je ne sais pas" ~ "Non et nsp",
+        TRUE ~ NA_character_) %>% 
+      factor(
+        levels = c(
+          "Non et nsp",
+          "I-II",
+          "III-IV"
+        ), 
+        ordered = TRUE
+      )
+    )
+```
+
+# II. Final dataset
+
+```{r}
+Endo_parcours_chir_examens_final <-
+  Endo_parcours_chir_examens %>%
+  mutate(across(
+    c(operation_endo_bin, niveaux_adherences_bin),
+    ~ case_when(. == 0 ~ "Non", . == 1 ~ "Oui", TRUE ~ as.character(.))
+  )) %>%
+  dplyr::select(
+    id_unik,
+    IdAction,
+    operation_endo_bin,
+    starts_with("date_operation"),
+    complication_operation,
+    stade_dvpt_maladie,
+    stade_dvpt_legere_severe,
+    starts_with("motifs_operation"),
+    starts_with("indic_"),
+    num_localisation_endo_cat,
+    localisation_final,
+    #taille_kyste_IRM_max,
+    tercile_taille_kyste_IRM,
+    ovaire_touches2,
+    trompe_touche2,
+    trompe_anomalie,
+    niveaux_adherences_cat,
+    niveaux_adherences_bin,
+    starts_with("nb_"),-nb_organe_enleve,-nb_organe_touche,-nb_operation_endo,
+    Endo_chir_examens_participated
+  ) %>%
+  mutate(across(
+    starts_with("date_operation"),
+    ~ as.Date(., format = "%d/%m/%Y")
+  )) %>%
+  distinct() %>%
+  mutate(across(
+    c(
+      operation_endo_bin,
+      complication_operation,
+      stade_dvpt_maladie,
+      stade_dvpt_legere_severe,
+      num_localisation_endo_cat,
+      localisation_final,
+      tercile_taille_kyste_IRM,
+      trompe_touche2,
+      indic_ovaire_touche,
+      motifs_operation1_cat,
+      nb_operation_endo_cat,
+      nb_operation_endo_cat2,
+      nb_organe_touche_bin,
+      nb_organe_touche_cat,
+      nb_organe_enleve_bin,
+      nb_organe_enleve_cat,
+      niveaux_adherences_cat,
+      niveaux_adherences_bin
+    ),
+    ~ case_when(is.na(IdAction) ~ "Not_answered", TRUE ~ .)
+  )) %>% 
+  dplyr::select(-IdAction)
+
+# Add a new modality in case of 'No surgery' to certain variables related to operation
+Endo_parcours_chir_examens_final <-
+  Endo_parcours_chir_examens_final %>%
+  mutate(across(
+    c(
+      complication_operation,
+      tercile_taille_kyste_IRM,
+      indic_ovaire_touche,
+      trompe_touche2,
+      nb_organe_enleve_bin,
+      nb_organe_enleve_cat,
+      nb_organe_touche_bin,
+      nb_organe_touche_cat,
+      stade_dvpt_legere_severe,
+      niveaux_adherences_bin,
+      niveaux_adherences_cat
+    ),
+    ~ case_when(operation_endo_bin == "Non" ~ "No surgery", TRUE ~ .)
+  ))
+```
+
+
+# III. Save the final dataframe 
+
+```{r}
+# update : 2025-05-30
+#write.csv(Endo_parcours_chir_examens_final,"Stage_M2_Complic_Gross/Endo_parcours_chir_examens_final.csv")
+```
+

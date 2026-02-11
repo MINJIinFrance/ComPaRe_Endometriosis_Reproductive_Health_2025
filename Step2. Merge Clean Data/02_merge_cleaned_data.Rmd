@@ -1,0 +1,1658 @@
+---
+title: "02_merge_cleaned_data"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : Merge all cleaned dataset
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Merge all cleaned dataset 
+*Date of creation* : 2025-04-09
+*Date of update* : 2025-06-02
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+```{r, setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(purrr) # reduce()
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gt)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+library(chromote)
+library(car)
+library(mediation)
+```
+
+# 0. Import all cleaned datasets
+
+```{r}
+# 1) socio demographique
+pop_demo_final <-
+  read.csv("C:/Users/nmj93/OneDrive/Master1_Biostats/Stage_M2_Complic_Gross/pop_demo_inclusion_final.csv") %>%
+  dplyr::select(-X)
+#pop_demo_final %>% glimpse
+
+# 2) comorbidité
+pop_comorb_final <-
+  read.csv("pop_comorbidite_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+#pop_comorb_final%>% glimpse
+
+
+# 3) Grossesse sans grossesses en cours
+SansGrossesseEnCours_final <-
+  read.csv("sansgrossesseencours_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+# # 1113 id_unik, 1575 pregnancies
+# SansGrossesseEnCours_final %>% distinct(id_unik) %>% n_distinct()
+# SansGrossesseEnCours_final %>% distinct(IdPregnancy) %>% n_distinct()
+
+# All participants
+# grossesse_all <-
+#   read.csv("grossesse_mod_final.csv", stringsAsFactors = TRUE)%>%
+#   dplyr::select(-X)
+# #grossesse_all %>% glimpse
+
+# 4) Santé des femmes
+SanteFemmes_final <-
+  read.csv("Sante_femmes_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+#SanteFemmes_final%>% glimpse
+
+# 5) Endo/Adenomyosis
+EndoAdeno_final <-
+  read.csv("Endo_Adeno_initial_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+#EndoAdeno_final%>% glimpse
+
+# 6) Endo/Adenomyosis Operation
+EndoAdeno_op_examen_final <-
+  read.csv(
+    "Endo_parcours_chir_examens_final.csv",
+    stringsAsFactors = TRUE
+  ) %>%
+  dplyr::select(-X)
+#EndoAdeno_op_examen_final%>% glimpse
+
+# 7) Dysmenorrhea
+EndoAdeno_dysmenor_final <-
+  read.csv("Endo_douleur_pelvic_abd_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+#EndoAdeno_dysmenor_final%>% glimpse
+
+# 8) Dyspareunia, dysuria and dyschezia
+EndoAdeno_douleurs_final <-
+  read.csv("Endo_dyspareunie_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+#EndoAdeno_douleurs_final%>% glimpse
+
+# 9) Financial situation
+situation_finan_final <-
+  read.csv("situation_finan_final.csv",
+           stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+
+# 10) PHQ9_GAD7
+PHQ9_GAD7_final <-  read.csv("PHQ9_GAD7_final.csv",
+                             stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+
+# 11) PSQI
+PSQI_final <-  read.csv("PSQI_final.csv", stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+
+# 11) Treatment Burden Questionnaire
+fardeau_trt_final <-  read.csv("fardeau_trt_final.csv",
+                               stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+
+# 12) Physical activity
+activite_physique_final <- read.csv("activite_physique_final.csv",
+                                    stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+
+# 13) Quality of life
+qualite_vie_final <-  read.csv("qualite_vie_final.csv",
+                               stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+
+# 14) Neuropathic pain
+Doul_neuro_final <- read.csv("doul_neuro_final.csv",
+                             stringsAsFactors = TRUE) %>%
+  dplyr::select(-X)
+```
+
+
+# I. Merge final datasets
+- All final datasets with 'SansGrossesseEnCours_final' -> df_merged_filterd
+
+```{r}
+df_list_filtered <- list(
+  SansGrossesseEnCours_final,
+  pop_demo_final,
+  situation_finan_final,
+  PHQ9_GAD7_final,
+  PSQI_final,
+  qualite_vie_final,
+  activite_physique_final,
+  fardeau_trt_final,
+  pop_comorb_final,
+  SanteFemmes_final,
+  EndoAdeno_final,
+  EndoAdeno_op_examen_final,
+  EndoAdeno_dysmenor_final,
+  EndoAdeno_douleurs_final,
+  Doul_neuro_final
+)
+
+df_merged_filtered <- reduce(df_list_filtered, 
+                             left_join, 
+                             by="id_unik")
+
+df_merged_filtered <- df_merged_filtered %>%
+  mutate(across(c(starts_with("date"), 
+                  starts_with("Date"), 
+                  merged_DateDebut), 
+                ~ as.Date(., format = "%Y-%m-%d")))
+
+
+#test <- df_merged_filtered
+```
+
+- Check 
+```{r}
+df_merged_filtered %>% distinct(id_unik) %>% n_distinct()
+df_merged_filtered %>% distinct(IdPregnancy) %>% n_distinct()
+```
+
+
+# II. Create new variables 
+
+```{r}
+#-----------------------------------
+# Age of first endo/Adeno operation : age_firstOP_endoadeno
+#-----------------------------------
+# 1. Calculate the first age of operation related to Endo/Adeno
+df_merged_filtered <- df_merged_filtered %>%
+  mutate(
+    age_firstOP_endoadeno =
+      as.character(round((date_operation1 - Date_naissance) / 365, 1)) %>%
+      as.numeric())
+
+# 2. Create a categorical variable 
+quantiles_agefirstOP <- round(
+  quantile(df_merged_filtered$age_firstOP_endoadeno, 
+                                probs = c(1/3,2/3), 
+           na.rm = TRUE))
+
+df_merged_filtered <- df_merged_filtered %>% 
+  mutate(
+    age_firstOP_endoadeno_cat = 
+      case_when(
+        age_firstOP_endoadeno < quantiles_agefirstOP[[1]] ~
+          paste0("<",quantiles_agefirstOP[[1]]),
+        age_firstOP_endoadeno >= quantiles_agefirstOP[[1]]& 
+          age_firstOP_endoadeno < quantiles_agefirstOP[[2]] ~
+          paste0(quantiles_agefirstOP[[1]],"-",quantiles_agefirstOP[[2]]),
+        age_firstOP_endoadeno >= quantiles_agefirstOP[[2]] ~
+          paste0(quantiles_agefirstOP[[2]],">="),
+        TRUE ~ NA_character_
+      ) %>% as.factor()
+  ) 
+
+# 3. Add new modalities to the categorical variable
+df_merged_filtered <- df_merged_filtered%>% 
+  mutate(
+    age_firstOP_endoadeno_cat=
+      case_when(
+        operation_endo_bin=="Non"& is.na(age_firstOP_endoadeno_cat) ~
+          "No operation",
+        operation_endo_bin=="Not_answered" & 
+          is.na(age_firstOP_endoadeno_cat) ~ "Not_answered",
+        TRUE ~ age_firstOP_endoadeno_cat
+           ))
+
+#------------------------------------------------------------
+#   Number of different types of pain
+# : how many different type of pain they suffered in their life
+#------------------------------------------------------------
+# 1. Create a temporary dataframe by making a new variable 
+new_dataframe <- df_merged_filtered %>%
+  distinct(
+    id_unik,
+    doul_pelvienne_regle,
+    doul_rapport_sexuel,
+    douleur_abdo,
+    douleur_miction,
+    trouble_digestif, 
+    doul_neuro_bin
+  ) %>%
+  mutate(
+    nb_types_doul = case_when(
+      rowSums(across(c(starts_with("doul"), trouble_digestif),
+                     ~ . %in% c("Not_answered","not_answered")), na.rm = TRUE) == 6 ~
+        "Not_answered",
+      TRUE ~ 
+        as.character(rowSums(across(c(starts_with("doul"), trouble_digestif), 
+                                    ~ . == "Oui"), 
+                             na.rm = TRUE)
+                     )
+      ) %>% as.factor()
+    ) %>% 
+  distinct(id_unik, nb_types_doul)
+
+# 2. Add this new variable to the main dataframe
+df_merged_filtered <-  df_merged_filtered %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+
+
+#----------------------------
+# Infertility (diagnostics)  : IRM, echo, ART or OP for the infertility
+#----------------------------
+new_dataframe <- df_merged_filtered %>%
+  group_by(id_unik) %>%
+  summarise(
+    methode_perID_IUI = any(methode_perID_IUI == TRUE, 
+                            na.rm = TRUE),
+    methode_perID_IVF= any(methode_perID_IVF == TRUE, 
+                            na.rm = TRUE)
+  ) %>% ungroup()
+
+df_merged_filtered <- df_merged_filtered %>% 
+  dplyr::select(-methode_perID_IUI,-methode_perID_IVF) %>% 
+  left_join(new_dataframe, by="id_unik")
+
+df_merged_filtered <- df_merged_filtered %>%
+  rowwise() %>%
+  mutate(
+    infertilite_diag = case_when(
+      all(
+        is.na(methode_perID_IUI),
+        is.na(methode_perID_IVF),
+        is.na(indic_motif_1_infertilite),
+        is.na(indic_motif_2_infertilite),
+        is.na(nb_echo_infertilite),
+        is.na(nb_IRM_infertilite)
+      ) ~ NA_character_,
+      any(
+        methode_perID_IUI == TRUE,
+        methode_perID_IVF == TRUE,
+        infertility_comorbidite == "Oui",
+        indic_motif_1_infertilite == "Opérée pour ce motif",
+        indic_motif_2_infertilite == "Opérée pour ce motif",
+        nb_echo_infertilite %in% c("1-5","6-10","11-20","Plus de 20"),
+        nb_IRM_infertilite %in% c("1-5","6-10")
+      ) ~ "Oui",
+
+      TRUE ~ "Non"
+    )
+  ) %>%
+  ungroup()
+
+rm(new_dataframe)
+
+# df_merged_filtered %>% distinct(id_unik, infertilite_diag, PMA_perID,infertility_comorbidite, nb_echo_infertilite, nb_IRM_infertilite, indic_motif_1_infertilite, indic_motif_2_infertilite) %>% View
+
+#==================================
+#    ADD SEVERAL NEW VARIABLES
+#==================================
+df_merged_filtered <- df_merged_filtered %>%
+  distinct() %>%
+  mutate(
+    #---------------------------------------------------------------------
+    # Endometriosis operation before the first pregnancy registered by participants
+    #---------------------------------------------------------------------
+    op_avant_1_preg =
+      case_when(
+        age_firstOP_endoadeno <= first_preg_age ~ "Oui",
+        age_firstOP_endoadeno > first_preg_age ~ "Non",
+        age_firstOP_endoadeno_cat == "No operation" ~ "Non",
+        age_firstOP_endoadeno_cat == "Not_answered" ~
+          "Not_answered",
+        TRUE ~ NA_character_
+      ),
+    
+    #---------------------------------------------------------------------
+    # Endometriosis operation before the last pregnancy registered by participants
+    #---------------------------------------------------------------------
+    op_avant_preg_perID =
+      case_when(
+        age_firstOP_endoadeno <= first_preg_age ~ "Before",
+        age_firstOP_endoadeno > first_preg_age &
+          is.na(last_preg_age_mod) ~
+          "After",
+        age_firstOP_endoadeno > first_preg_age &
+          !is.na(last_preg_age_mod) &
+          age_firstOP_endoadeno <= last_preg_age_mod ~
+          "Before",
+        age_firstOP_endoadeno > first_preg_age &
+          !is.na(last_preg_age_mod) &
+          age_firstOP_endoadeno > last_preg_age_mod ~
+          "After",
+        age_firstOP_endoadeno_cat == "No operation" ~ "No Operation",
+        age_firstOP_endoadeno_cat == "Not_answered" ~ "nsp",
+        TRUE ~ NA_character_
+      ),
+    #---------------------------------------------------------------
+    #  Endometriosis operation for the treatement of infertility
+    #--------------------------------------------------------------
+    op_infertility_perID = 
+      case_when(
+        operation_endo_bin=="Oui"&
+        (indic_motif_1_infertilite =="Opérée pour ce motif" | 
+          indic_motif_2_infertilite =="Opérée pour ce motif") ~ "for_infertility",
+        
+        operation_endo_bin == "Oui" ~ "for_others",
+        
+        operation_endo_bin=="Non" ~ "No operation",
+        operation_endo_bin == "Not_answered" ~ "Not_answered",
+        TRUE ~NA_character_
+      ),
+    
+    #---------------------------------------------------------------------
+    # Add the information on operations related to infertility into conception methode per id
+    #---------------------------------------------------------------------
+    methode_conception_perID_cat_simple_mod = case_when(
+      op_avant_preg_perID != "Before"  ~ 
+        methode_conception_perID_cat_simple,
+      op_avant_preg_perID =="Before" & op_infertility_perID =="for_others" ~ 
+        methode_conception_perID_cat_simple,
+      op_avant_preg_perID == "Before" & op_infertility_perID =="for_infertility" &
+        is.na(methode_conception_perID_cat_simple) ~ 
+        "Operation",
+      op_avant_preg_perID == "Before" & op_infertility_perID =="for_infertility" &
+        methode_conception_perID_cat_simple %in% c("Naturelle seule", "Operation") ~ 
+        "Operation",
+      op_avant_preg_perID == "Before" & op_infertility_perID =="for_infertility" &
+        methode_conception_perID_cat_simple %in% c("PMA/Medicaments", "Operation+PMA") ~ 
+        "Operation+PMA",
+      TRUE~ NA_character_
+      ),
+    
+    Methode_conception_bin_perID_mod = 
+      ifelse(methode_conception_perID_cat_simple_mod =="Naturelle seule",
+             "Naturelle", 
+             "Avec méthodes"),
+      
+    # methode_conception_perID_cat_simple_mod = case_when(
+    #   op_avant_preg_perID != "Before" ~ methode_conception_perID_cat_simple,
+    #   op_avant_preg_perID == "Before" & is.na(methode_conception_perID_cat_simple) ~ 
+    #     "Operation",
+    #   op_avant_preg_perID == "Before" &
+    #     methode_conception_perID_cat_simple %in% c("PMA/Medicaments", "Operation+PMA") ~
+    #     "Operation+PMA",
+    #   op_avant_preg_perID == "Before" &
+    #     methode_conception_perID_cat_simple %in% c("Naturelle seule", "Operation") ~
+    #     "Operation",
+    #   TRUE ~ NA_character_
+    # ),
+    # Methode_conception_bin_perID_mod = 
+    #   ifelse(methode_conception_perID_cat_simple_mod=="Naturelle seule","Naturelle","Avec méthodes")
+    
+    complication_operation_mod = case_when(
+      complication_operation=="Oui"~ "Oui",
+      complication_operation=="No surgery" ~ "No surgery",
+      complication_operation=="Not_answered" ~ "Not_answered",
+      complication_operation=="Non" & 
+        indic_motif_2_complication =="Opérée pour ce motif" ~ "Oui",
+      complication_operation=="Non" &
+        indic_motif_2_complication !="Opérée pour ce motif" ~ "Non",
+      
+      TRUE ~NA_character_
+      )
+  )
+
+
+#------------------------
+# OP before the pregnancy : Before : Yes/No
+#-------------------------
+df_merged_filtered <- df_merged_filtered %>% 
+  mutate(
+    op_before_preg_perPreg = 
+      case_when(
+        operation_endo_bin=="Non" ~ "No operation",
+        operation_endo_bin =="Not_answered" ~ "nsp",
+        operation_endo_bin=="Oui"&
+          age_firstOP_endoadeno <= age_maternal ~ "Yes",
+        operation_endo_bin=="Oui"&
+          age_firstOP_endoadeno > age_maternal ~ "No",
+        TRUE ~ NA_character_
+      )
+  )
+
+
+#--------------------------
+# Regrouping the modality : status_marital_ini and situation_emploi_ini2
+#--------------------------
+df_merged_filtered <- df_merged_filtered %>% 
+  mutate(
+    statut_marital_ini_cat =
+      case_when(
+        statut_marital_ini %in% c("Marié(e)", "En couple (concubinage, PACS)") ~
+          "Maried/Couple(PACS,concubinage)",
+        statut_marital_ini %in% c("Célibataire", "Divorcé(e)") ~
+          "Single/divorced"
+      ) %>% as.factor(),
+    
+    situation_emploi_ini2_cat =
+      case_when(
+        situation_emploi_ini2 %in% c(
+          "Sans Emploi",
+          "En invalidité / en longue maladie",
+          "Etudiant",
+          "Autre"
+        ) ~ "Pas active",
+        situation_emploi_ini2 == "Employee" ~ "Employee"
+      ) %>% as.factor()
+  )
+
+#test <- df_merged_filtered
+
+
+#------------------------------------------------------------
+# Conception method + endometriosis operation per pregnancy 
+#------------------------------------------------------------
+# 1. Create new variables : Age at each operation and Age at each operation only related to infertility
+df_merged_filtered <- df_merged_filtered %>% 
+  # Age at each operation
+  mutate(
+    # age_firstOP_endoadeno
+    age_2ndOP_endoadeno=
+      round(as.numeric(as.character(date_operation2-Date_naissance))/365,1),
+    age_3rdOP_endoadeno=
+      round(as.numeric(as.character(date_operation3-Date_naissance))/365,1),
+    age_4thOP_endoadeno=
+      round(as.numeric(as.character(date_operation4-Date_naissance))/365,1),
+    age_5thOP_endoadeno=
+      round(as.numeric(as.character(date_operation5-Date_naissance))/365,1),
+    age_6thOP_endoadeno=
+      round(as.numeric(as.character(date_operation6-Date_naissance))/365,1)
+    ) %>% 
+  # Age at each operation only related to infertility
+  mutate(
+    age_OP_infertility = case_when(
+      indic_motif_1_infertilite == "Opérée pour ce motif" ~ 
+        age_firstOP_endoadeno,
+      indic_motif_2ndOP_infertilite == "Opérée pour ce motif" ~
+        age_2ndOP_endoadeno,
+      indic_motif_3rdOP_infertilite == "Opérée pour ce motif" ~ 
+        age_3rdOP_endoadeno, 
+      indic_motif_4thOP_infertilite == "Opérée pour ce motif" ~
+        age_4thOP_endoadeno,
+      indic_motif_5thOP_infertilite == "Opérée pour ce motif" ~
+        age_5thOP_endoadeno,
+      indic_motif_6thOP_infertilite == "Opérée pour ce motif" ~
+        age_6thOP_endoadeno,
+      TRUE ~ NA_real_
+  )
+)
+
+# 2. Create a temporary dataframe 
+new_dataframe <- df_merged_filtered %>%
+  mutate(
+    op_infertility_before_preg = case_when(
+      op_infertility_perID == "for_infertility" &
+        age_OP_infertility <= age_maternal ~
+        "Yes",
+      op_infertility_perID == "for_infertility" &
+        age_OP_infertility > age_maternal ~
+        "No",
+      op_infertility_perID != "for_infertility" ~
+        op_infertility_perID,
+      TRUE ~ NA_character_
+    ),
+    closest_op_time_diff = case_when(
+      op_infertility_before_preg == "Yes" ~ age_maternal - age_OP_infertility,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  group_by(id_unik, IdPregnancy) %>%
+  mutate(
+    min_diff = ifelse(all(is.na(
+      closest_op_time_diff
+    )), NA_real_, min(closest_op_time_diff, na.rm = TRUE)),
+    
+    op_infertility_1yr_before_each_preg = case_when(
+      !is.na(closest_op_time_diff) &
+        closest_op_time_diff == min_diff &
+        closest_op_time_diff <= 1 ~ TRUE,
+      TRUE ~ FALSE
+    )
+  ) %>%
+  ungroup() %>%
+  distinct(
+    id_unik,
+    IdPregnancy,
+    min_diff,
+    op_infertility_1yr_before_each_preg,
+    methode_conception_perPreg_cat_simple,
+    op_infertility_perID
+  )
+
+#-----------------
+# Justification  |
+#--------------------------------------------------------------------------------------------------------
+# The severity of endometriosis negatively correlates with IVF pregnancy rates, with the optimal time for IVF being 7-25 months post-surgery (Alkudmani et al., 2018). 
+# Laparoscopic treatment of endometriosis in infertile women led to 65% achieving pregnancy within 8.5 months on average, with shorter time to spontaneous pregnancy for earlier stage disease.(https://doi.org/10.1016/j.rbmo.2009.12.010) 
+# Most infertile women with endometriosis conceived within 6 months after laparoscopic surgery.(https://doi.org/10.5653/cerm.2013.40.1.29)
+# Laparoscopic surgery for endometriosis can improve fertility, with most spontaneous pregnancies occurring within 12 months postoperatively.(https://doi.org/10.1016/j.gyobfe.2011.07.037)
+#----------------------------------------------------------------------------------------------------------
+# 3. Add the new endometriosis operation information to each pregnancy in order to create a new variable
+new_dataframe <- new_dataframe %>% 
+  mutate(
+    methode_conception_perPreg_cat_simple_mod =
+      case_when(
+        op_infertility_1yr_before_each_preg==FALSE ~ 
+          methode_conception_perPreg_cat_simple,
+        
+        op_infertility_1yr_before_each_preg==TRUE & 
+          methode_conception_perPreg_cat_simple =="PMA/Medicaments" ~ 
+          "Operation+PMA",
+        
+        op_infertility_1yr_before_each_preg==TRUE & 
+          methode_conception_perPreg_cat_simple %in% c("Operation","Naturelle seule")|
+          is.na(methode_conception_perPreg_cat_simple) ~ 
+          "Operation",
+        TRUE ~ NA_character_
+      )
+  )
+
+# 4. Merge
+df_merged_filtered <- df_merged_filtered %>% 
+  left_join(new_dataframe %>% distinct(IdPregnancy, min_diff, methode_conception_perPreg_cat_simple_mod), 
+            by="IdPregnancy") #%>% 
+  #dplyr::select(-c(age_2ndOP_endoadeno:age_6thOP_endoadeno))
+
+# 5. Delete the temporary dataframe 
+rm(new_dataframe)
+
+#---------------------------------------
+# Conception method in dummy variables
+#---------------------------------------
+df_merged_filtered <- df_merged_filtered%>%
+  mutate(
+    # ART conception method
+    conception_PMA_perPreg = 
+      ifelse(methode_conception_perPreg_cat_simple_mod %in% 
+                           c("PMA/Medicaments","Operation+PMA"), "Oui","Non"),
+    
+    conception_PMA_perID= 
+      ifelse(methode_conception_perID_cat_simple_mod %in% 
+                           c("PMA/Medicaments","Operation+PMA"), "Oui","Non"),
+    
+    # Natural conception
+    conception_natural_perPreg = 
+      ifelse(methode_conception_perPreg_cat_simple_mod =="Naturelle seule",
+             "Oui","Non"),
+    conception_natural_perID= 
+      ifelse(methode_conception_perID_cat_simple_mod =="Naturelle seule",
+             "Oui","Non"),
+    
+    # Surgery taken coception method
+    conception_operation_perPreg = 
+      ifelse(methode_conception_perPreg_cat_simple_mod %in% 
+               c("Operation","Operation+PMA"),"Oui","Non"),
+    conception_operation_perID= 
+      ifelse(methode_conception_perID_cat_simple_mod %in% 
+               c("Operation","Operation+PMA"),"Oui","Non")
+  )
+
+#---------------------------------------------------------
+# Temps en moyenne entre
+# - la 1ère grossesse et le diagnostic d’endométriose
+# - le 1er accouchement et le diagnostic d’endométriose
+#---------------------------------------------------------
+df_merged_filtered <- df_merged_filtered %>% 
+  mutate(
+    time_entre_preg_diag = 
+      case_when(
+        !is.na(first_preg_age)&!is.na(Age_premier_diag_endo_ade_cat) ~
+          first_preg_age-Age_premier_diag_endo_ade,
+        TRUE~ NA_real_
+      ),
+    
+    time_entre_accouche_diag= 
+      case_when(
+        !is.na(first_preg_age)&!is.na(Age_premier_diag_endo_ade_cat) & 
+          status_terme_all== "Terme" ~
+          first_preg_age-Age_premier_diag_endo_ade,
+        TRUE~NA_real_
+      )
+    )
+
+#-------------------------------------
+# Diagnostic before the 1st pregnancy
+#-------------------------------------
+df_merged_filtered <- df_merged_filtered %>% 
+  mutate(
+    diagnostic_avant_1_preg =
+      case_when(
+        time_entre_preg_diag < 0  ~ "Apres",
+        time_entre_preg_diag >= 0  ~ "Avant/même_moment",
+        TRUE~ NA_character_
+      )
+    )
+
+#-------------------------------------------
+#   Endometriosis stage in dummy variables 
+#-------------------------------------------
+df_merged_filtered <- df_merged_filtered %>% 
+  mutate(
+    stade_dvpt_I_II = case_when(
+      stade_dvpt_legere_severe =="I-II" ~ "Oui",
+      stade_dvpt_legere_severe !="I-II" ~ "Non",
+      TRUE ~ NA_character_
+    ),
+    stade_dvpt_III_IV = case_when(
+      stade_dvpt_legere_severe =="III-IV" ~ "Oui",
+      stade_dvpt_legere_severe !="III-IV" ~ "Non",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+#----------------------------------------------
+# History of F/C, Preterm, IVG, IMG 
+#----------------------------------------------
+df_merged_filtered  <- df_merged_filtered %>% 
+  mutate(
+    history_FC_preterm_IVGIMG_perPreg = 
+      case_when(
+        type_preg_all_simple %in% c("Fausse-couche","IVG/IMG","Preterm") ~ "Oui",
+        TRUE ~ "Non")) %>% 
+  group_by(id_unik) %>%
+  mutate(
+    history_FC_preterm_IVGIMG_perID =
+      case_when(
+        any(history_FC_preterm_IVGIMG_perPreg=="Oui") ~ "Oui",
+        all(history_FC_preterm_IVGIMG_perPreg=="Non") ~ "Non",
+        TRUE ~ NA_character_
+    )) %>% ungroup()
+```
+
+
+# III. Save the final merged dataframe 
+
+```{r}
+# update : 2025-06-20
+write.csv(df_merged_filtered, "df_merged_filtered.csv")
+```
+
+
+# IV. Final dataframe for the analysis
+## Objective 2 : Live birth (Yes/No)
+
+```{r}
+df_final_LB_1 <- df_merged_filtered %>%
+  distinct(
+    id_unik,
+    live_birth_bin_atleast_once_all, # outcome
+    
+    # - Socio-demographic and helath condition
+    age,
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2_cat,
+    situation_financiere,
+    
+    # - Menstrual and Reproductive history 
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+    first_preg_age,
+    
+    # - Comordibidty
+    nb_mal_sansEndoAde_cat,
+    comorbidite_bin,
+    #gynecologique_diseases,
+    
+    # - Endo/Adeno 
+    endo_ade_categorie,
+    type_endo,
+    delai_diag_cat,
+    age_symptome_cat,
+    age_firstOP_endoadeno_cat,
+    
+    stade_dvpt_legere_severe,
+    
+    # - Operation
+    operation_endo_bin,
+    op_avant_1_preg,
+    complication_operation_mod,
+    #trompe_anomalie,
+    
+    # # - Pain
+    # dysmenorrhea_avant_1_preg,
+    # doul_abdo_avant_1_preg,
+    # dyspareunia_avant_1_preg,
+    # dyschezia_avant_1_preg,
+    # dysuria_avant_1_preg
+  ) %>% 
+  mutate(across(where(is.character), as.factor))
+
+##############################################
+#              Minji version
+##############################################
+df_final_LB_2 <- df_merged_filtered %>%
+  dplyr::select(
+    id_unik,
+    live_birth_bin_atleast_once_all, # outcome
+    
+    # - Socio-demographic and helath condition
+    age,
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2_cat,
+    situation_financiere,
+    
+    # - Menstrual and Reproductive history 
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+    first_preg_age,
+    
+    # - Comordibidty
+    nb_mal_sansEndoAde_cat,
+    comorbidite_bin,
+    gynecologique_diseases,
+    autoimmune_diseases,
+    metabolic_syndrome,
+    
+    # - Endo/Adeno 
+    endo_ade_categorie,
+    type_endo,
+    DIE,OMA,SPE,ADENO,
+    
+    delai_diag_cat,    
+    delai_diag_cat_simple,
+
+    age_symptome_cat,
+    age_firstOP_endoadeno_cat,
+    stade_dvpt_legere_severe,
+
+    
+    # - Operation
+    operation_endo_bin,
+    op_avant_1_preg,
+    complication_operation_mod,
+    #trompe_anomalie,
+    
+    
+    ends_with("_participated")
+  ) %>% 
+  distinct() %>%
+  mutate(across(where(is.character), as.factor))
+
+```
+
+```{r}
+##############################################
+#              Minji version
+##############################################
+df_final_LB_2 <- df_merged_filtered %>%
+  dplyr::select(
+    id_unik,
+    live_birth_bin_atleast_once_all, # outcome
+    
+    # - Socio-demographic and helath condition
+    age,
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2_cat,
+    situation_financiere,
+    
+    # - Menstrual and Reproductive history 
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+    first_preg_age,
+    
+    # - Comordibidty
+    nb_mal_sansEndoAde_cat,
+    comorbidite_bin,
+    gynecologique_diseases,
+    autoimmune_diseases,
+    metabolic_syndrome,
+    
+    # - Endo/Adeno 
+    endo_ade_categorie,
+    type_endo,
+    DIE,OMA,SPE,ADENO,
+    
+    delai_diag_cat,    
+    delai_diag_cat_simple,
+
+    age_symptome_cat,
+    age_firstOP_endoadeno_cat,
+    stade_dvpt_legere_severe,
+
+    
+    # - Operation
+    operation_endo_bin,
+    op_avant_1_preg,
+    complication_operation_mod,
+    #trompe_anomalie,
+    
+    
+    ends_with("_participated")
+  ) %>% 
+  distinct() %>%
+  mutate(across(where(is.character), as.factor))
+```
+
+
+
+### - Save the final dataframe for the analysis
+
+```{r}
+# update : 25-07-11
+write.csv(df_final_LB_1, "df_final_LB_1.csv")
+write.csv(df_final_LB_2, "df_final_LB_2.csv")
+
+```
+
+
+## Objective 3 : Pregnancy Complications 
+
+Risk factors  : 
+Maternal age, nulliparity, history of miscarriage/stillbirth, and lack of pregnancy wantedness (https://doi.org/10.1186/1471-2393-14-347)
+
+Obesity is a major risk factor for a wide range of adverse obstetric outcomes. (https://doi.org/10.1016/j.siny.2009.10.001)
+
+Preeclampsia :
+maternal age, multiple pregnancy, nulliparity, chronic hypertension, inadequate antenatal care, obesity, and diabetes. (https://doi.org/10.30574/wjarr.2023.17.1.0012)
+
+*Metabolic syndrome (MS)* :is increasingly prevalent in pregnant women, with rates ranging from 3% to 42% depending on various factors (Hamilton dos Prazeres Tavares et al., 2015). MS during pregnancy is associated with numerous obstetric complications, including gestational diabetes, preeclampsia, fetal growth retardation, macrosomia, preterm delivery, and stillbirth (А. В. Хромылев, 2014; Hamilton dos Prazeres Tavares et al., 2015; A. Zakharko et al., 2018). These complications are often referred to as "great obstetrical syndromes" due to their shared pathogenesis (L. Shelestova & L.F. Ushullu, 2021). Women with MS are also at higher risk for venous thrombosis during pregnancy (А. В. Хромылев, 2014). Newborns of mothers with MS tend to have higher birth weights and are more likely to experience hypoxic and ischemic central nervous system damage (A. Zakharko et al., 2018). To mitigate these risks, lifestyle modifications, including balanced low-calorie diets and exercise, are recommended during the preconception period (L. Shelestova & L.F. Ushullu, 2021).
+
+*ART* : Assisted reproductive techniques (ART) have been associated with an increased risk of obstetric and perinatal complications compared to spontaneous pregnancies (Bănică et al., 2021; Madrazo-Cabo et al., 2020). These complications include low birth weight, prematurity, small for gestational age infants, admission to neonatal intensive care units, congenital malformations, cesarean sections, and premature rupture of membranes (Madrazo-Cabo et al., 2020). Multiple pregnancies, which are more common in ART, are an independent risk factor for complications (Bănică et al., 2021). However, even singleton ART pregnancies demonstrate higher rates of perinatal complications and maternal issues such as preeclampsia and gestational diabetes (Reddy et al., 2007). The increased risk is observed in both in vitro fertilization (IVF) and intracytoplasmic sperm injection (ICSI) procedures (Madrazo-Cabo et al., 2020). While it's challenging to separate ART-related risks from underlying reproductive pathology, healthcare providers should discuss these potential complications with couples considering ART (Reddy et al., 2007).
+
+*Earlier Age at Menarche*
+- associated with obstetric outcomes in nulliparous women.(https://doi.org/10.1111/jog.15057)
+- Early menarche is a small risk factor for endometriosis.(https://doi.org/10.1016/j.fertnstert.2012.05.035 )
+- Early menarche (before age 12) is associated with increased risk of cardiovascular disease events, cardiovascular mortality, and overall mortality in women.(https://doi.org/10.1210/jc.2009-1789)
+- Earlier age at menarche is associated with increased risk of gestational diabetes in pregnancy. (https://doi.org/10.1007/s00592-018-1214-z)
+- Early menarche is associated with increased risk of type 2 diabetes, potentially mediated through excessive adult adiposity.(doi: 10.1093/aje/kwp372; https://pmc-ncbi-nlm-nih-gov.ezproxy.u-paris.fr/articles/PMC2842205/, https://doi.org/10.1016/j.diabet.2017.01.002 ) 
+- Early menarche is associated with increased risk of metabolic disorders, female-specific cancers, and mortality in women.(https://doi.org/10.1093/qjmed/hcac187)
+- Early menarche (≤11 years) is associated with a higher risk of developing gestational diabetes mellitus.(https://doi.org/10.1093/aje/kww201)
+- Early menarche is associated with higher risk of preeclampsia, and prepregnancy weight may modify the association between long menstrual cycles and preeclampsia risk.(https://doi.org/10.5402/2011/472083)
+- Early menarche age is associated with higher general and abdominal obesity in young women, while late menarche age is associated with higher probability of underweight.(https://doi.org/10.3390/medicina60101711 ;2024)
+- Earlier menarche age is associated with increased risks of gestational hypertension and preeclampsia.(https://doi.org/10.1111/jch.14737 ;2023)
+- Earlier menarche (≤11 years) is associated with an increased prevalence of preterm birth.(https://doi.org/10.1038/s41598-017-12817-2 ; 2017)
+
+
+*Age at the first pregnancy* 
+- Early age at first childbirth is associated with increased risk of poor pregnancy outcomes, including low birthweight, preterm birth, and maternal anemia.
+
+
+### - One row = One participant (n=378)
+#### * DF V1 : Original
+```{r}
+# Filter only the pregnancies covered by the new module
+df_final_complic_perID <- 
+  df_merged_filtered %>% 
+  filter(module=="Nouveau") %>% 
+  dplyr::select(
+    id_unik, 
+    #IdPregnancy,
+    
+    # Outcome
+    total_complications_bin_perID,
+    total_complications_cat_perID,
+    Complications_cat_perID_grouped,
+    
+    # - Socio-demographic and helath condition
+    age,
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2_cat,
+    #Statut_tabac_ini,
+    #freq_alcool_ini,
+    situation_financiere,
+    
+    # - Comordibidty
+    nb_mal_sansEndoAde_cat,
+    #comorbidite_bin,
+    gynecologique_diseases,
+    metabolic_syndrome,
+    infertilite_diag,
+    autoimmune_diseases,
+    
+    # - Menstrual and Reproductive history 
+    #age_regle_cat,
+    age_regle_cat_simple,
+
+    # - Endo/Adeno 
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+    endo_ade_categorie,
+    type_endo,
+    ADENO,
+    OMA,
+    SPE,
+    DIE,
+    
+    stade_dvpt_legere_severe,
+    stade_dvpt_I_II,
+    stade_dvpt_III_IV,
+    
+    #delai_diag,
+    delai_diag_cat,
+    delai_diag_cat_simple,
+    age_symptome_cat,
+    #Age_premier_diag_endo_ade,
+    #Age_premier_diag_endo_ade_cat,
+    
+    # - Operation
+    operation_endo_bin,
+    #nb_operation_endo_cat2,
+    complication_operation,
+    age_firstOP_endoadeno_cat,
+    #num_localisation_endo_cat,
+    #niveaux_adherences_bin,
+    op_avant_1_preg,
+    indic_ovaire_touche,
+    trompe_anomalie,
+    
+    # - Pregnancy 
+    nb_total_gross,
+    #live_birth_bin_atleast_once_all, # livebirth yes/no
+    nb_live_births_all,
+    first_preg_age,
+    # type_preg_all_simple,
+    # PoidInf2,
+    # PoidSup2,
+    history_FC_preterm_IVGIMG_perID,
+    
+    methode_conception_perID_cat_simple_mod,
+    conception_PMA_perID, 
+    conception_natural_perID, 
+    conception_operation_perID,
+    
+    Mode_accouchement_perID,
+    VD_perID,
+    Csection_perID,
+    
+    Travail_accouchement_perID,
+    labour_natural_perID,
+    labour_induced_perID,
+    
+    PriseenCharge_cat_perID,
+    # nb_allaitement,
+    # allaitement_YN_atleast,
+    
+    # - Pain 
+    doul_abdo_avant_1_preg,
+    dysmenorrhea_avant_1_preg,
+    dyspareunia_avant_1_preg,
+    dyschezia_avant_1_preg,
+    dysuria_avant_1_preg,
+    
+    Endo_Adeno_initial_participated,
+    Endo_chir_examens_participated,
+    Endo_dysmenorrhea_abd_participated,
+    Endo_douleurs_participated,
+    sante_femmes_participated
+
+  ) %>% 
+  distinct()
+
+df_final_complic_perID %>%dim
+```
+
+#### * DF V2: with all age related variable in continuous 
+
+```{r}
+# Filter only the pregnancies covered by the new module
+df_final_complic_perID_V2 <- 
+  df_merged_filtered %>% 
+  filter(module=="Nouveau") %>% 
+  dplyr::select(
+    id_unik, 
+    #IdPregnancy,
+    
+    # Outcome
+    total_complications_bin_perID,
+    total_complications_cat_perID,
+    Complications_cat_perID_grouped,
+    
+    # - Socio-demographic and helath condition
+    age,
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2_cat,
+    #Statut_tabac_ini,
+    #freq_alcool_ini,
+    situation_financiere,
+    
+    # - Comordibidty
+    nb_mal_sansEndoAde_cat,
+    #comorbidite_bin,
+    gynecologique_diseases,
+    metabolic_syndrome,
+    infertilite_diag,
+    autoimmune_diseases,
+    
+    # - Menstrual and Reproductive history 
+    age_regles_ini,
+    age_regle_cat,
+    age_regle_cat_simple,
+
+    # - Endo/Adeno 
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+    endo_ade_categorie,
+    type_endo,
+    ADENO,
+    OMA,
+    SPE,
+    DIE,
+    
+    stade_dvpt_legere_severe,
+    stade_dvpt_I_II,
+    stade_dvpt_III_IV,
+    
+    delai_diag,
+    delai_diag_cat,
+    delai_diag_cat_simple,
+    age_symptome_cat,
+    Age_premier_diag_endo_ade,
+    Age_premier_diag_endo_ade_cat,
+    
+    # - Operation
+    operation_endo_bin,
+    complication_operation,
+    age_firstOP_endoadeno,
+    age_firstOP_endoadeno_cat,
+    op_avant_1_preg,
+    indic_ovaire_touche,
+    trompe_anomalie,
+    
+    # - Pregnancy 
+    nb_total_gross,
+    nb_live_births_all,
+    first_preg_age,
+    history_FC_preterm_IVGIMG_perID,
+    
+    methode_conception_perID_cat_simple_mod,
+    conception_PMA_perID, 
+    conception_natural_perID, 
+    conception_operation_perID,
+    
+    Mode_accouchement_perID,
+    VD_perID,
+    Csection_perID,
+    
+    Travail_accouchement_perID,
+    labour_natural_perID,
+    labour_induced_perID,
+    
+    PriseenCharge_cat_perID,
+    
+    # - Pain 
+    doul_abdo_avant_1_preg,
+    dysmenorrhea_avant_1_preg,
+    dyspareunia_avant_1_preg,
+    dyschezia_avant_1_preg,
+    dysuria_avant_1_preg,
+    
+    Endo_Adeno_initial_participated,
+    Endo_chir_examens_participated,
+    Endo_dysmenorrhea_abd_participated,
+    Endo_douleurs_participated,
+    sante_femmes_participated
+
+  ) %>% 
+  distinct()
+
+df_final_complic_perID_V2 %>%dim
+```
+
+#### => Save the final dataframe for the analysis
+
+```{r}
+# Update : 2025-06-20
+write.csv(df_final_complic_perID, "df_final_complic_perID.csv")
+write.csv(df_final_complic_perID_V2, "df_final_complic_perID_V2.csv")
+```
+
+### - One row = One pregnancy
+n= 468
+
+```{r}
+df_final_complic_perPreg <- 
+  df_merged_filtered %>% 
+  filter(module=="Nouveau") %>% 
+  dplyr::select(
+    id_unik, 
+    IdPregnancy,
+    
+    # Outcome
+    total_complications_bin_perPreg,
+    total_complications_cat_perPreg,
+    Complications_cat_perPreg_grouped,
+    
+    # - Socio-demographic and helath condition
+    age,
+    statut_marital_ini_cat,
+    diplome_ini2,
+    situation_emploi_ini2_cat,
+    situation_financiere,
+    
+    # - Comordibidty
+    nb_mal_sansEndoAde_cat,
+    gynecologique_diseases,
+    metabolic_syndrome,
+    infertilite_diag,
+    autoimmune_diseases,
+    
+    # - Menstrual and Reproductive history 
+    #age_regle_cat,
+    age_regle_cat_simple,
+    #nb_total_gross,
+    #nb_live_births_all,
+    #nb_incomplete_preg_pt_onlynew,
+    
+    # - Endo/Adeno 
+    family_atcd_EndoAdeno_cat,
+    family_atcd_doul_pelv,
+    endo_ade_categorie,
+    type_endo,
+    ADENO,
+    OMA,
+    SPE,
+    DIE,
+    
+    stade_dvpt_legere_severe,
+    stade_dvpt_III_IV,
+    # delai_diag,
+    # delai_diag_cat,
+    delai_diag_cat_simple,
+    #Age_premier_diag_endo_ade,
+    age_symptome_cat,
+    #Age_premier_diag_endo_ade_cat,
+    
+    # - Operation
+    #operation_endo_bin,
+    nb_operation_endo_cat2,
+    complication_operation,
+    age_firstOP_endoadeno_cat,
+    #num_localisation_endo_cat,
+    #niveaux_adherences_bin,
+    op_avant_1_preg,
+    indic_ovaire_touche, 
+    trompe_anomalie,
+    
+    # - Pain 
+    doul_abdo_avant_1_preg,
+    dysmenorrhea_avant_1_preg,
+    dyspareunia_avant_1_preg,
+    dyschezia_avant_1_preg,
+    dysuria_avant_1_preg,
+    
+    # - Pregnancy
+    #nb_total_gross,
+    age_maternal,
+    live_birth_bin_all, # Live birth Oui/Non per preg
+    type_preg_all_simple, # type of pregnancies
+    gravida,
+    para,
+    PoidInf2, # per preg
+    PoidSup2, # per preg
+    methode_conception_perPreg_cat_simple_mod,
+    conception_PMA_perPreg,
+    Mode_accouchement,
+    Travail_accouchement,
+    PriseenCharge_bin,
+    PriseenCharge_cat_perPreg,
+    Allaitement2, # per perg
+    
+    history_FC_preterm_IVGIMG_perID,
+    
+    Endo_Adeno_initial_participated,
+    Endo_chir_examens_participated,
+    Endo_dysmenorrhea_abd_participated,
+    Endo_douleurs_participated,
+    sante_femmes_participated
+    
+  ) %>% 
+  distinct()
+df_final_complic_perPreg %>% dim
+```
+
+#### =>  Save the final dataframe 
+
+```{r}
+# update : 2025-06-16
+write.csv(df_final_complic_perPreg, "df_final_complic_perPreg.csv")
+```
+
+
+GEE TEST
+```{r}
+#install.packages("geepack")
+library(geepack)
+
+# outcome : binary
+df_final_complic_perPreg <- df_final_complic_perPreg %>% 
+  mutate(live_birth_bin_all=ifelse(live_birth_bin_all=="Oui",1,0))
+
+gee <- geeglm(live_birth_bin_all ~ PMA_perPreg, 
+              id = id_unik, 
+              data = df_final_complic_perPreg, 
+              family = binomial, 
+              corstr = "exchangeable")
+summary(gee)
+
+library(geepack)
+
+gee_data <- df_final_complic_perPreg %>%
+  mutate(
+    live_birth_bin_all = ifelse(live_birth_bin_all == "Oui", 1, 0)
+  ) %>%
+  filter(!is.na(live_birth_bin_all), !is.na(situation_financiere), !is.na(id_unik)) %>%
+  mutate(situation_financiere = factor(situation_financiere))
+
+gee <- geeglm(
+  live_birth_bin_all ~ situation_financiere,
+  id = id_unik,
+  data = gee_data,
+  family = binomial,
+  corstr = "exchangeable"
+)
+
+summary(gee)
+
+
+table(df_final_complic_perPreg$live_birth_bin_all, useNA = "always")
+table(df_final_complic_perPreg$situation_financiere, useNA = "always")
+
+```
+
+
+#### - Save the final dataframe for the analysis
+
+```{r}
+
+```
+
+
+Sequence analysis TEST
+```{r}
+library(TraMineR)
+
+#-------------------------------------
+#     Age at each operation
+#-------------------------------------
+# 1. operation and age at the operation
+operation_cols <- paste0("date_operation", 1:13)
+df_long_op <- df_merged_filtered %>%
+  dplyr::select(id_unik, all_of(operation_cols), Date_naissance) %>%
+  pivot_longer(cols = starts_with("date_operation"),
+               names_to = "operation_num",
+               values_to = "date_op") %>%
+  filter(!is.na(date_op)) %>%
+  mutate(age = round(interval(Date_naissance, ymd(date_op)) / years(1),1),
+         event = "O") %>%
+  dplyr::select(id_unik, age, event) %>% 
+  distinct()
+
+# 2. Onset Age of Symptoms and Age at First Diagnosis
+df_symptom_diag <- df_merged_filtered %>%
+  left_join(Endo_Adeno_initial %>% 
+              distinct(id_unik, age_symptome), 
+            by ="id_unik") %>%
+  dplyr::select(id_unik, age_symptome, Age_premier_diag_endo_ade) %>%
+  pivot_longer(
+    cols = c(age_symptome, Age_premier_diag_endo_ade),
+    names_to = "event_type",
+    values_to = "age"
+  ) %>%
+  mutate(
+    event = case_when(
+      event_type == "age_symptome" ~ "S",
+      event_type == "Age_premier_diag_endo_ade" ~ "D"
+    )
+  ) %>%
+  dplyr::select(id_unik, age, event)
+
+# 3. pregnancy start and end date and pregnancy results
+df_preg <- df_merged_filtered %>%
+  mutate(
+    age_preg = round(
+      interval(Date_naissance, ymd(merged_DateDebut)) / years(1), 3),
+    age_outcome = round(interval(Date_naissance, ymd(DateFin)) / years(1), 3),
+    event_preg = "P",
+    event_outcome = ifelse(status_terme_all == "Terme", "B", "I")
+  ) %>%
+  dplyr::select(id_unik, age_preg, event_preg, age_outcome, event_outcome) %>%
+  pivot_longer(
+    cols = c(age_preg, age_outcome),
+    names_to = "what",
+    values_to = "age"
+  ) %>%
+  mutate(event = ifelse(what == "age_preg", event_preg, event_outcome)) %>%
+  dplyr::select(id_unik, age, event)
+
+# 4. age menarche and event 
+df_age_menarche <- df_merged_filtered %>% 
+  distinct(id_unik, age_regles_ini) %>% 
+  mutate(
+    event = ifelse(!is.na(age_regles_ini), "M", NA),
+    age = age_regles_ini) %>% 
+  dplyr::select(- age_regles_ini)
+
+
+# 4. Determine the Most Recent Date of the Last Observation
+df_Endo_Adeno_initial <- Endo_Adeno_initial %>%
+  distinct(id_unik, DateValidation) %>%
+  mutate(DateValidation_EndoAdenoinit =
+           as.Date(DateValidation, format = "%d/%m/%Y")) %>%
+  dplyr::select(-DateValidation)
+df_Endo_parcours_chir_examens <- Endo_parcours_chir_examens %>%
+  distinct(id_unik, DateValidation) %>%
+  mutate(DateValidation_operation = 
+           as.Date(DateValidation, format = "%d/%m/%Y")) %>%
+  dplyr::select(-DateValidation)
+df_grossesse_mod2 <- grossesse_mod2 %>%
+  distinct(id_unik, DateModification, Date_naissance) %>%
+  group_by(id_unik) %>%
+  summarise(
+    DateModification_gross = max(DateModification, na.rm = TRUE),  
+    Date_naissance = first(Date_naissance)  
+  ) %>%
+  ungroup()
+
+df <- df_Endo_Adeno_initial %>%
+  left_join(df_Endo_parcours_chir_examens, by = "id_unik") %>%
+  left_join(df_grossesse_mod2, by = "id_unik") %>% 
+  left_join(df_merged_filtered %>% distinct(id_unik,age), by="id_unik")
+
+df_age <- df %>%
+  mutate(
+    recent_DateValidation = pmax(
+      DateValidation_EndoAdenoinit,
+      DateValidation_operation,
+      DateModification_gross,
+      na.rm = TRUE
+    ),
+    age_at_last_obs = 
+      round(as.numeric((recent_DateValidation - Date_naissance) / 365), 1),
+    age_final = pmax(age, age_at_last_obs, na.rm = TRUE)
+  ) %>%
+  distinct(id_unik, age_final) %>%
+  mutate(age = age_final, event = "END") %>%
+  dplyr::select(-age_final) %>% 
+  filter(!is.na(age)) %>%  # Remove rows with NA in age
+  group_by(id_unik) %>%
+  slice_max(age) %>%  # Get the row with the maximum age
+  ungroup() 
+  
+# MERGE ALL dataframes 
+event_df <- bind_rows(
+  df_symptom_diag,
+  df_long_op,
+  df_preg, 
+  df_age_menarche,
+  df_age) %>%
+  filter(!is.na(age)) %>%
+  arrange(id_unik, age) %>% 
+  distinct()
+
+# Add 0.1 if some ages are equal
+event_df <- event_df %>%
+  group_by(id_unik, age) %>%
+  mutate(
+    age = if_else(
+      "M" %in% event & "S" %in% event & event == "S",
+      age + 0.1,
+      age
+    ),
+    age = if_else(
+      "P" %in% event & "I" %in% event & event=="I",
+      age + 0.1,
+      age
+    ),
+    age= if_else(
+      "S" %in% event & "D" %in% event & event=="D",
+      age + 0.1,
+      age
+    )
+  ) %>%
+  ungroup()
+
+# Arrange data selon age
+event_df <- event_df %>%
+  group_by(id_unik) %>%
+  arrange(age) %>%
+  mutate(time = row_number()) %>%
+  ungroup()
+
+##############TEST##################
+# Without Pregnancy information 
+event_df_mod <-  event_df %>% 
+  filter(event!="P") %>%
+  group_by(id_unik) %>% 
+  mutate(time= row_number()) %>% 
+  ungroup()
+#event_df_mod %>% View
+seq_data_mod <- event_df_mod %>%
+  pivot_wider(id_cols = id_unik,
+              names_from = time, 
+              values_from = event, 
+              names_prefix = "T") %>%
+  replace(is.na(.), "-")
+
+seq_data_mod %>% View
+
+seq_obj_mod <- seqdef(seq_data_mod %>%
+                        dplyr::select(-id_unik))
+
+seqstatf(seq_obj_mod)
+seqdplot(seq_obj_mod, border = NA, with.legend = TRUE)
+seqIplot(seq_obj_mod,
+         border = NA,
+         with.legend = TRUE,
+         main = "Reproductive Trajectories (Individual)")
+
+
+#################################
+#------------------------------
+# Tranformation in wide format
+#------------------------------
+seq_data <- event_df %>%
+  pivot_wider(id_cols = id_unik,
+              names_from = time, 
+              values_from = event, 
+              names_prefix = "T") %>%
+  replace(is.na(.), "-")
+
+
+seq_data %>% View
+#----------------------------
+#      Sequence Analysis 
+#----------------------------
+#install.packages("TraMineR")
+library(TraMineR)
+
+seq_obj <- seqdef(seq_data %>% dplyr::select(-id_unik))
+
+seqstatf(seq_obj)
+seqdplot(seq_obj, border = NA, with.legend = TRUE)
+seqIplot(seq_obj,
+         border = NA,
+         with.legend = TRUE,
+         main = "Reproductive Trajectories (Individual)")
+
+
+# 트랜지션 레이트 매트릭스 시각화
+seqtrate(seq_obj)
+```
+
+
+
+```{r}
+dist_matrix <- seqdist(seq_obj_mod, method = "OM", sm = "CONSTANT")
+
+dist_matrix <- as.dist(dist_matrix)
+#class(dist_matrix)
+hc <- hclust(dist_matrix)
+
+clusters <- cutree(hc, k = 3)
+
+seqdplot(seq_obj_mod, group = clusters,
+         with.legend = TRUE,
+         main = "Sequence Distribution by Cluster")
+
+# -------------------
+# silhouette 
+#----------------
+
+
+
+```
+
+ CoxPH, Kaplan-Meier
+```{r}
+diagnosis_data <- event_df[event_df$event %in% c("I"), ]
+diagnosis_data$event_bin <- ifelse(diagnosis_data$event == "I", 1, 0)
+
+library(survival)
+library(survminer)
+surv_obj <- Surv(time = diagnosis_data$age, event = diagnosis_data$event_bin)
+
+# Kaplan-Meier 
+km_fit <- survfit(surv_obj ~1)
+
+plot(km_fit, xlab = "Age", ylab = "Probability", 
+     main = "Kaplan-Meier Curve for -")
+
+# coxph
+cox_fit <- coxph(surv_obj ~ first_preg_age, 
+                 data = diagnosis_data %>% 
+                   left_join(df_merged_filtered %>% 
+                               distinct(id_unik, first_preg_age),
+                             by="id_unik"))
+summary(cox_fit)
+
+
+
+###############################
+#   Competing risks : B / I
+###############################
+library(cmprsk)
+
+# event: "B" (Birth), "I" (incomplete) 
+# time: age at the pregnancy outcome
+preg_data <- event_df[event_df$event %in% c("B", "I"), ]
+preg_data$status <- ifelse(preg_data$event == "B", 1, 2) # 1: birth, 2: incomplete
+preg_data <- preg_data %>% 
+  left_join(df_merged_filtered %>% 
+                distinct(id_unik, PMA_perID),
+            by="id_unik")
+# competing risks
+cr_fit <- cuminc(ftime = preg_data$age, 
+                 fstatus = preg_data$status, 
+                 group = preg_data$PMA_perID)
+plot(cr_fit, color = 1:4, lty = 1:4)
+```
+
+```{r}
+df_noNA <- df_final_complic_perPreg %>%
+  dplyr::select(Complications_cat_perPreg_grouped,
+                age, 
+                age_maternal,
+         statut_marital_ini_cat,
+         situation_financiere,
+         diplome_ini2,
+         endo_ade_categorie,
+         age_regle_cat_simple,
+         type_endo,
+         age_firstOP_endoadeno_cat,
+         operation_endo_bin,
+         methode_conception_perPreg_cat_simple_mod,
+         Mode_accouchement,
+         op_avant_1_preg,
+         Travail_accouchement) %>%
+  na.omit()
+
+# 이걸 기준으로 model.matrix 만들기
+df_dummy <- model.matrix(~ . -1, data = df_noNA)
+df_dummy <- as.data.frame(df_dummy)
+df_dummy$complication <- df_noNA$Complications_cat_perPreg_grouped
+
+
+# df_dummy <- model.matrix( ~ live_birth_bin_all + 
+#                             statut_marital_ini_cat +
+#                             situation_financiere +
+#                             # nb_mal_sansEndoAde_cat+
+#                             gynecologique_diseases+
+#                             endo_ade_categorie +
+#                             age_regle_cat_simple +
+#                             type_endo +
+#                             age_firstOP_endoadeno_cat +
+#                             # operation_endo_bin +
+#                             methode_conception_perPreg_cat_simple_mod +
+#                             Mode_accouchement +
+#                             op_avant_1_preg +
+#                             Travail_accouchement
+#                           -1,
+#                           data = df_final_complic_perPreg)
+# 
+# # 2. 필요한 변수 추가
+# df_dummy <- as.data.frame(df_dummy)
+# df_dummy$complication <-
+#   df_final_complic_perPreg$Complications_cat_perPreg_grouped 
+# df_dummy$id_unik <- df_final_complic_perPreg$id_unik
+
+# 3. PCA
+pca_res <- prcomp(df_dummy[, !names(df_dummy) %in% 
+                             c("complication", "id_unik")], 
+                  scale. = TRUE)
+
+# numeric 열만 필터링
+df_numeric <- df_dummy[sapply(df_dummy, is.numeric)]
+# PCA 실행
+pca_res <- prcomp(df_numeric, scale. = TRUE)
+
+# 3. 계층적 클러스터링
+dist_mat <- dist(pca_res$x[, 1:5]) 
+hc <- hclust(dist_mat)
+
+# 4. 덴드로그램 확인 및 군집 수 결정
+plot(hc)
+rect.hclust(hc, k=3,  border = "red") 
+
+#install.packages("factoextra")
+library(factoextra)
+fviz_nbclust(df_dummy, kmeans, method = "wss")
+
+# 5. 군집 할당
+df_dummy$cluster <- cutree(hc, k = 3)
+
+# 6. 군집별 합병증 분포 확인
+table(df_dummy$cluster, df_dummy$Complications_cat_perPreg_groupedMultiple_complications)
+
+```
+

@@ -1,0 +1,973 @@
+---
+title: "01_clean_Endo_dyspareunie_dyschezie_dysurie"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_Endo_dyspareunie_dyschezie_dysurie
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-05-13
+*Author* : stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import the raw dataset 
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+Endo_dyspareunie <-
+  read.csv("Complic_pop_QST_0465_20250407_dys.csv",
+           fileEncoding = "latin1",
+           colClasses = c(Sexe = "character"))
+
+#-----------------------------------------------
+# Replace cells with nothing or spaces with NA
+#-----------------------------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  mutate(across(everything(), ~na_if(trimws(.), "")),
+         across(everything(), str_trim),
+         across(everything(), ~ gsub("\u0092", "'", .)),
+         across(everything(), ~ gsub("\u0085", "…", .))
+         )
+
+#-------------------------------------
+# Remove all columns having only NAs
+#-------------------------------------
+na_count <- Endo_dyspareunie %>% sapply(function(x) sum(is.na(x))) #; na_count
+index_col_NA <- which(na_count==nrow(Endo_dyspareunie)) %>% as.vector() # index of columns having only NA
+Endo_dyspareunie <- Endo_dyspareunie[,-index_col_NA]
+
+#--------------------------
+#  Pain score in numeric
+#--------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  mutate(across(starts_with("niveau_"), 
+                ~ as.numeric(as.character(.))),
+         across(starts_with("Date"),
+                ~ as.Date(.,format="%d/%m/%Y")))
+```
+
+# I. Preprocessing Data
+
+```{r}
+#---------------------------
+#  Participation : Yes/No
+#---------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  mutate(Endo_douleurs_participated=ifelse(is.na(IdAction),
+                                                "Non","Oui"))
+
+#------------------------
+# First sexual rapport 
+#------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>%
+  mutate(first_rapport= case_when(
+    doul_rapport_15 %in% c("Oui", "Non, pas de douleurs") ~ "avant 15",
+    doul_rapport_16 %in% c("Oui", "Non, pas de douleurs") ~ "16-20",
+    doul_rapport_21 %in% c("Oui", "Non, pas de douleurs") ~ "21-30",
+    doul_rapport_31 %in% c("Oui", "Non, pas de douleurs") ~ "31-40",
+    doul_rapport_41 %in% c("Oui", "Non, pas de douleurs") ~ "41+",
+    rowSums(across(starts_with("doul_rapport"), ~ . %in% 
+                     c("Pas de rapport sexuel à cette période", 
+                       "Je ne me souviens plus"))) == 5 ~
+      "Je ne me souviens du tout",
+    TRUE ~ NA_character_
+  ))
+
+#-----------------------------------
+#   Dyspareunia : Onset Age group
+#-----------------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>%
+  mutate(onset_age_dyspareunia = case_when(
+    doul_rapport_15 == "Oui" ~ "avant 15",
+    doul_rapport_16 == "Oui" ~ "16-20",
+    doul_rapport_21 == "Oui" ~ "21-30",
+    doul_rapport_31 == "Oui" ~ "31-40",
+    doul_rapport_41 == "Oui" ~ "41+",
+    rowSums(across(starts_with("doul_rapport"), ~ . != "Oui")) == 5 ~ "pas encore et nsp",
+    TRUE ~ NA_character_
+  ))
+
+#-------------------------------------------------------------
+#  Dyspareunie : Immediate vs. delayed onset by considering the first sexual rapport 
+#-------------------------------------------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>%
+  mutate(onset_type_dyspareunie = case_when(
+    first_rapport == "avant 15" & onset_age_dyspareunia == "avant 15" ~ "immediate",
+    first_rapport == "avant 15" & onset_age_dyspareunia != "avant 15" & !is.na(onset_age_dyspareunia) ~ "delayed",
+
+    first_rapport == onset_age_dyspareunia ~ "immediate",
+
+    onset_age_dyspareunia %in% c("16-20", "21-30", "31-40", "41+") & 
+      first_rapport %in% c("avant 15", "16-20", "21-30", "31-40") &
+      onset_age_dyspareunia != "pas encore et nsp" &
+      first_rapport != "Je ne me souviens du tout" ~ "delayed",
+
+    onset_age_dyspareunia == "pas encore et nsp" | 
+      first_rapport == "Je ne me souviens du tout" ~ "Unknown",
+    TRUE ~ NA_character_
+  ))
+
+#-----------------------
+#  Recent dyspareunia 
+#-----------------------
+Endo_dyspareunie <- Endo_dyspareunie %>%
+  mutate(recent_doul_rapport = coalesce(
+    na_if(doul_rapport_41, "Je n'ai pas encore atteint cette tranche d'âge"),
+    na_if(doul_rapport_31, "Je n'ai pas encore atteint cette tranche d'âge"),
+    na_if(doul_rapport_21, "Je n'ai pas encore atteint cette tranche d'âge"),
+    na_if(doul_rapport_16, "Je n'ai pas encore atteint cette tranche d'âge"),
+    na_if(doul_rapport_15, "Je n'ai pas encore atteint cette tranche d'âge")
+  ))
+
+#---------------------------------------------------------
+# Dyspareunia improvement compared to initial dyspareunia
+#---------------------------------------------------------
+# 1. wide format to long format 
+data_long <- Endo_dyspareunie %>%
+  select(id_unik, starts_with("niveau_severite_douleur_")) %>% 
+  pivot_longer(cols = starts_with("niveau_severite_douleur_"), 
+               names_to = "age_group", 
+               values_to = "score") %>%
+  filter(!is.na(score)) %>%
+  # make age groups (15~41) 
+  mutate(age_group = case_when(
+    str_detect(age_group, "15") ~ 15,
+    str_detect(age_group, "1620") ~ 20,
+    str_detect(age_group, "2130") ~ 30,
+    str_detect(age_group, "3140") ~ 40,
+    str_detect(age_group, "4150") ~ 41
+  ))
+
+# 2. Check the first and last score of severity of pain and compare these scores 
+data_summary <- data_long %>%
+  group_by(id_unik) %>%
+  summarise(
+    first_score = score[which.min(age_group)],
+    last_score = score[which.max(age_group)]
+  ) %>%
+  mutate(
+    dyspareunie_improved = case_when(
+      last_score < first_score ~"improved",
+      last_score > first_score ~ "worsend",
+      last_score == first_score ~"stable",
+      TRUE ~ NA_character_ ))
+
+# 3. Put new variable created to the original dataset 
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  left_join(
+    data_summary %>% select(id_unik, dyspareunie_improved),
+    by="id_unik"
+  )
+
+# 4. Delete two temporary dataframe : data_long and data_summary
+rm(data_long);rm(data_summary)
+
+#-------------------------------------------------------------
+#  Mean of the worst severity level of dyspareunia over the entire life
+#-------------------------------------------------------------
+# 1. Create a temporary dataframe by making a new variable
+new_dataframe <- Endo_dyspareunie %>%
+  select(id_unik, starts_with("niveau_severite_douleur_")) %>%
+  mutate(
+    total_score = rowSums(select(
+      ., starts_with("niveau_severite_douleur_")
+    ), na.rm = TRUE),
+    na_count = 5 - rowSums(is.na(select(
+      ., starts_with("niveau_severite_douleur_")
+    ))),
+    mean_niveau_severite_dyspareunia = total_score / na_count
+  ) %>%
+  select(id_unik, mean_niveau_severite_dyspareunia)
+
+# 2. Add a new categorical variables 
+quantiles <- new_dataframe$mean_niveau_severite_dyspareunia %>% quantile(probs=c(1/3,2/3), na.rm=TRUE) %>% round()
+
+new_dataframe <- new_dataframe %>%
+  mutate(
+    mean_niveau_severite_dyspareunia_cat =
+      case_when(
+        mean_niveau_severite_dyspareunia < quantiles[[1]] ~
+          paste0("<", quantiles[1]),
+        mean_niveau_severite_dyspareunia >= quantiles[[1]] &
+          mean_niveau_severite_dyspareunia < quantiles[[2]] ~
+          paste0(quantiles[1], "-", quantiles[2]),
+        mean_niveau_severite_dyspareunia >= quantiles[[2]] ~
+          paste0(">=", quantiles[2])
+      )
+  )
+
+# 3. Add a new variable to the main dataframe
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 3. Delete the temporary dataframe and quantile information
+rm(new_dataframe); rm(quantiles)
+
+# 4. Modify the categorical variable by adding 'no pain' modality 
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  mutate(mean_niveau_severite_dyspareunia_cat=
+           case_when(
+             doul_rapport_sexuel=="Non" ~ "No pain",
+             TRUE ~ mean_niveau_severite_dyspareunia_cat
+           ))
+
+#---------------------------
+#     Digestive trouble 
+#---------------------------
+# 1. Create a temporary dataframe 
+new_dataframe <- Endo_dyspareunie %>% 
+  select(id_unik,starts_with("trouble_digestif_")) %>%
+  mutate(
+    across(starts_with("trouble_digestif_"), ~ case_when(
+      . == "Je ne me souviens plus" ~ "nsp",
+      . == "Non" ~ "Non",
+      . %in% c("Oui, des troubles digestifs fonctionnels (inconfort digestif, ballonnements, constipation, diarrhée…)",
+               "Oui, des difficultés d'évacuation (évacuation anormalement longue, en plusieurs temps, ou nécessitant des efforts prolongés, d'intenses poussées ou l'aide de suppositoires/doigts/lavements)",
+               "Oui, des douleurs lors de l'évacuation de selles (dyschézie)") ~ "Oui",
+      . == "Je n'ai pas atteint cette tranche d'âge" ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_
+    ))
+  ) %>% 
+  rowwise() %>% 
+  mutate(
+    trouble_digestif_final_15 = case_when(
+      all(c_across(starts_with("trouble_digestif_15")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("trouble_digestif_15")) == "Oui") ~ "Oui",
+      all(c_across(starts_with("trouble_digestif_15")) == "Non") ~ "Non",  
+      all(c_across(starts_with("trouble_digestif_15")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("trouble_digestif_15")) == "Non") ~ "Non",  
+      any(c_across(starts_with("trouble_digestif_15")) == "nsp") ~ "nsp",  
+      TRUE ~ NA_character_  
+    ),
+    trouble_digestif_final_1620 = case_when(
+      all(c_across(starts_with("trouble_digestif_16")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("trouble_digestif_16")) == "Oui") ~ "Oui",  
+      all(c_across(starts_with("trouble_digestif_16")) == "Non") ~ "Non",  
+      all(c_across(starts_with("trouble_digestif_16")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("trouble_digestif_16")) == "Non") ~ "Non",  
+      any(c_across(starts_with("trouble_digestif_16")) == "nsp") ~ "nsp",  
+      TRUE ~ NA_character_  
+    ),
+    trouble_digestif_final_2130 = case_when(
+      all(c_across(starts_with("trouble_digestif_21")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("trouble_digestif_21")) == "Oui") ~ "Oui",  
+      all(c_across(starts_with("trouble_digestif_21")) == "Non") ~ "Non",  
+      all(c_across(starts_with("trouble_digestif_21")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("trouble_digestif_21")) == "Non") ~ "Non",  
+      any(c_across(starts_with("trouble_digestif_21")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("trouble_digestif_21")) == "Pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_ 
+    ),
+    trouble_digestif_final_3140 = case_when(
+      all(c_across(starts_with("trouble_digestif_31")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("trouble_digestif_31")) == "Oui") ~ "Oui",  
+      all(c_across(starts_with("trouble_digestif_31")) == "Non") ~ "Non",  
+      all(c_across(starts_with("trouble_digestif_31")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("trouble_digestif_31")) == "Non") ~ "Non",  
+      any(c_across(starts_with("trouble_digestif_31")) == "nsp") ~ "nsp", 
+      any(c_across(starts_with("trouble_digestif_31")) == "Pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_  
+    ),
+    trouble_digestif_final_4150 = case_when(
+      all(c_across(starts_with("trouble_digestif_41")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("trouble_digestif_41")) == "Oui") ~ "Oui", 
+      all(c_across(starts_with("trouble_digestif_41")) == "Non") ~ "Non", 
+      all(c_across(starts_with("trouble_digestif_41")) == "nsp") ~ "nsp", 
+      any(c_across(starts_with("trouble_digestif_41")) == "Non") ~ "Non",  
+      any(c_across(starts_with("trouble_digestif_41")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("trouble_digestif_41")) == "Pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_  
+    )
+  ) %>%
+  ungroup()
+
+# 2. Select only new variables, add them to the main dataframe and remove original variables
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  left_join(new_dataframe %>%
+              select(id_unik,
+                     starts_with("trouble_digestif_final_")),
+            by="id_unik"
+  ) %>% 
+  select(-c(trouble_digestif_15_1:trouble_digestif_4150_3),
+         -trouble_digestif, trouble_digestif)
+
+# 3. Delete the temporary dataframe
+rm(new_dataframe)
+
+#-------------------------------------
+#   Dyschezia  : Onset Age group
+#-------------------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>%
+  mutate(onset_age_dyschezia = case_when(
+    trouble_digestif_final_15 == "Oui" ~ "avant 15",
+    trouble_digestif_final_1620 == "Oui" ~ "16-20",
+    trouble_digestif_final_2130 == "Oui" ~ "21-30",
+    trouble_digestif_final_3140 == "Oui" ~ "31-40",
+    trouble_digestif_final_4150 == "Oui" ~ "41+",
+    rowSums(across(starts_with("trouble_digestif_final_"), ~ . != "Oui")) == 5 ~ "pas encore et nsp",
+    TRUE ~ NA_character_
+  ))
+
+#-------------------------------------------------------
+# Level of pain when evacuation of 'selles' improvement
+#-------------------------------------------------------
+# 1. wide format to long format 
+data_long <- Endo_dyspareunie %>%
+  mutate(across(starts_with("niveau_doul_selles_"), ~ as.numeric(as.character(.)))) %>% 
+  select(id_unik, starts_with("niveau_doul_selles_")) %>% 
+  pivot_longer(cols = starts_with("niveau_doul_selles_"), 
+               names_to = "age_group", 
+               values_to = "score") %>%
+  filter(!is.na(score)) %>%
+  # make age groups (15-41) 
+  mutate(age_group = case_when(
+    str_detect(age_group, "15") ~ 15,
+    str_detect(age_group, "1620") ~ 20,
+    str_detect(age_group, "2130") ~ 30,
+    str_detect(age_group, "3140") ~ 40,
+    str_detect(age_group, "4150") ~ 41
+  ))
+
+# 2. Check the first and last score of severity of pain and compare these scores 
+data_summary <- data_long %>%
+  group_by(id_unik) %>%
+  summarise(
+    first_score = score[which.min(age_group)],
+    last_score = score[which.max(age_group)]
+  ) %>%
+  mutate(
+    doul_selles_improved = case_when(
+      last_score < first_score ~"improved",
+      last_score > first_score ~ "worsend",
+      last_score == first_score ~"stable",
+      TRUE ~ NA_character_ ))
+
+# 3. Put new variable created to the original dataset 
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  left_join(
+    data_summary %>% select(id_unik, doul_selles_improved),
+    by="id_unik"
+  )
+
+# 4. Delete two temporary dataframe : data_long and data_summary
+rm(data_long);rm(data_summary)
+
+#-------------------------------------------------------------
+#  Mean of the worst severity level of dyschezia over the entire life 
+#-------------------------------------------------------------
+# 1. Create a temporary dataframe 
+new_dataframe <- Endo_dyspareunie %>%
+  select(id_unik, starts_with("niveau_doul_selles_")) %>%
+  mutate(
+    total_score = rowSums(select(
+      ., starts_with("niveau_doul_selles_")
+    ), na.rm = TRUE),
+    na_count = 5 - rowSums(is.na(select(
+      ., starts_with("niveau_doul_selles_")
+    ))),
+    mean_niveau_severite_dyschezia = total_score / na_count
+  ) %>%
+  select(id_unik, mean_niveau_severite_dyschezia) 
+
+
+# 2. Add a new categorical variables 
+quantiles <- new_dataframe$mean_niveau_severite_dyschezia %>%
+  quantile(probs=c(1/3,2/3), na.rm=TRUE) %>% 
+  round()
+
+new_dataframe <- new_dataframe %>%
+  mutate(
+    mean_niveau_severite_dyschezia_cat =
+      case_when(
+        mean_niveau_severite_dyschezia < quantiles[[1]] ~
+          paste0("<", quantiles[1]),
+        mean_niveau_severite_dyschezia >= quantiles[[1]] &
+          mean_niveau_severite_dyschezia < quantiles[[2]] ~
+          paste0(quantiles[1], "-", quantiles[2]),
+        mean_niveau_severite_dyschezia >= quantiles[[2]] ~
+          paste0(">=", quantiles[2])
+      )
+  )
+
+# 3. Add a new variable to the main dataframe
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 4. Delete the temporary dataframe and quantile information
+rm(new_dataframe); rm(quantiles)
+
+# 5. Modify the categorical variable by adding 'no pain' modality 
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  mutate(mean_niveau_severite_dyschezia_cat=
+           case_when(
+             trouble_digestif=="Non" ~
+               "No_dyschezia_digestive_trouble",
+             trouble_digestif=="Oui"&
+               is.na(mean_niveau_severite_dyschezia_cat) ~ 
+               "Only_digestive_trouble",
+             TRUE ~ mean_niveau_severite_dyschezia_cat
+           ))
+
+#--------------------------------------
+#  Dysuria : Oui/Non par group of age
+#--------------------------------------
+# 1. Create a temporary dataframe 
+new_dataframe <- Endo_dyspareunie %>% 
+  select(id_unik,starts_with("douleur_miction_")) %>%
+  mutate(
+    across(starts_with("douleur_miction_"), ~ case_when(
+      . == "Je ne me souviens plus" ~ "nsp",
+      . == "Non" ~ "Non",
+      . %in% c("Oui, des difficultés à uriner nécessitant de contracter ou d'appuyer sur le ventre pour « aider » la vessie, ou une miction anormalement longue avec un jet urinaire faible, ou une miction longue à débuter, ou en plusieurs jets",
+               "Oui, j'ai eu tendance à faire des infections urinaires",
+               "Oui, une incontinence urinaire",
+               "Oui, des douleurs lors de la miction (hors période d'infection urinaire)") ~ "Oui",
+      . == "Je n'ai pas atteint cette tranche d'âge" ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_
+    ))
+  ) %>% 
+  rowwise() %>% 
+  mutate(
+    douleur_miction_final_15  = case_when(
+      all(c_across(starts_with("douleur_miction_15")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("douleur_miction_15")) == "Oui") ~ "Oui",
+      all(c_across(starts_with("douleur_miction_15")) == "Non") ~ "Non",  
+      all(c_across(starts_with("douleur_miction_15")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("douleur_miction_15")) == "Non") ~ "Non",  
+      any(c_across(starts_with("douleur_miction_15")) == "nsp") ~ "nsp",
+      TRUE ~ NA_character_  
+    ),
+    douleur_miction_final_1620 = case_when(
+      all(c_across(starts_with("douleur_miction_16")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("douleur_miction_16")) == "Oui") ~ "Oui",  
+      all(c_across(starts_with("douleur_miction_16")) == "Non") ~ "Non",  
+      all(c_across(starts_with("douleur_miction_16")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("douleur_miction_16")) == "Non") ~ "Non",  
+      any(c_across(starts_with("douleur_miction_16")) == "nsp") ~ "nsp",
+      any(c_across(starts_with("douleur_miction_16")) == "Je n'ai pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_  
+    ),
+    douleur_miction_final_2130 = case_when(
+      all(c_across(starts_with("douleur_miction_21")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("douleur_miction_21")) == "Oui") ~ "Oui",  
+      all(c_across(starts_with("douleur_miction_21")) == "Non") ~ "Non",  
+      all(c_across(starts_with("douleur_miction_21")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("douleur_miction_21")) == "Non") ~ "Non",  
+      any(c_across(starts_with("douleur_miction_21")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("douleur_miction_21")) == "Je n'ai pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_ 
+    ),
+    douleur_miction_final_3140 = case_when(
+      all(c_across(starts_with("douleur_miction_31")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("douleur_miction_31")) == "Oui") ~ "Oui",  
+      all(c_across(starts_with("douleur_miction_31")) == "Non") ~ "Non",  
+      all(c_across(starts_with("douleur_miction_31")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("douleur_miction_31")) == "Non") ~ "Non",  
+      any(c_across(starts_with("douleur_miction_31")) == "nsp") ~ "nsp", 
+      any(c_across(starts_with("douleur_miction_31")) == "Je n'ai pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_  
+    ),
+    douleur_miction_final_4150 = case_when(
+      all(c_across(starts_with("douleur_miction_41")) %in% NA) ~ NA_character_,  
+      any(c_across(starts_with("douleur_miction_41")) == "Oui") ~ "Oui", 
+      all(c_across(starts_with("douleur_miction_41")) == "Non") ~ "Non", 
+      all(c_across(starts_with("douleur_miction_41")) == "nsp") ~ "nsp", 
+      any(c_across(starts_with("douleur_miction_41")) == "Non") ~ "Non",  
+      any(c_across(starts_with("douleur_miction_41")) == "nsp") ~ "nsp",  
+      any(c_across(starts_with("douleur_miction_41")) == "Je n'ai pas atteint cette tranche d'âge") ~ "Pas atteint cette tranche d'âge",
+      TRUE ~ NA_character_  
+    )
+  ) %>%
+  ungroup() %>% 
+  select(id_unik,starts_with("douleur_miction_final"))
+
+# 2. Add new variables created to the main dataframe by deleting original variables
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  select(-starts_with("douleur_miction_")) %>% 
+  left_join(new_dataframe, by="id_unik") %>% 
+  select(-douleur_miction, douleur_miction)
+
+# 3. Delete the temporary dataframe 
+rm(new_dataframe)
+
+#-------------------------------------
+#   Dysuria  : Onset Age group
+#-------------------------------------
+Endo_dyspareunie <- Endo_dyspareunie %>%
+  mutate(onset_age_dysuria = case_when(
+    douleur_miction_final_15 == "Oui" ~ "avant 15",
+    douleur_miction_final_1620 == "Oui" ~ "16-20",
+    douleur_miction_final_2130 == "Oui" ~ "21-30",
+    douleur_miction_final_3140 == "Oui" ~ "31-40",
+    douleur_miction_final_4150 == "Oui" ~ "41+",
+    rowSums(across(starts_with("douleur_miction_final_"), ~ . != "Oui"))==5 ~ "pas encore et nsp",
+    TRUE ~ NA_character_
+  ))
+
+#-----------------------------------------------------------------------
+#  Mean of the worst severity level of dysurenia over the entire life 
+#-----------------------------------------------------------------------
+# 1. Create a temporary dataframe 
+new_dataframe <- Endo_dyspareunie %>%
+  select(id_unik, starts_with("niveau_doul_miction_")) %>%
+  mutate(
+    total_score = rowSums(select(
+      ., starts_with("niveau_doul_miction_")
+    ), na.rm = TRUE),
+    na_count = 5 - rowSums(is.na(select(
+      ., starts_with("niveau_doul_miction_")
+    ))),
+    mean_niveau_severite_dysuria = round(total_score / na_count,1)
+  ) %>%
+  select(id_unik, mean_niveau_severite_dysuria) 
+
+# 2. Add a new categorical variables 
+quantiles <- new_dataframe$mean_niveau_severite_dysuria %>%
+  quantile(probs=c(1/3,2/3), na.rm=TRUE) %>% 
+  round()
+
+new_dataframe <- new_dataframe %>%
+  mutate(
+    mean_niveau_severite_dysuria_cat =
+      case_when(
+        mean_niveau_severite_dysuria < quantiles[[1]] ~
+          paste0("<", quantiles[1]),
+        mean_niveau_severite_dysuria >= quantiles[[1]] &
+          mean_niveau_severite_dysuria < quantiles[[2]] ~
+          paste0(quantiles[1], "-", quantiles[2]),
+        mean_niveau_severite_dysuria >= quantiles[[2]] ~
+          paste0(">=", quantiles[2])
+      )
+  )
+
+# 3. Add a new variable to the main dataframe
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  left_join(new_dataframe, by="id_unik")
+
+# 4. Delete the temporary dataframe and quantile information
+rm(new_dataframe); rm(quantiles)
+
+# 5. Modify the categorical variable by adding 'no pain' modality 
+Endo_dyspareunie <- Endo_dyspareunie %>% 
+  mutate(mean_niveau_severite_dysuria_cat=
+           case_when(
+             douleur_miction=="Non" ~ "No pain",
+             TRUE ~ mean_niveau_severite_dysuria_cat
+           ))
+```
+
+
+# II. Final dataset
+## 1) Variables selection 
+```{r}
+Endo_dyspareunie_final <- Endo_dyspareunie %>% 
+  select(id_unik,
+         # dyspareunia
+         doul_rapport_sexuel, 
+         first_rapport,
+         onset_age_dyspareunia,
+         #onset_type_dyspareunie,
+         #recent_doul_rapport,
+         #dyspareunie_improved,
+         starts_with("doul_rapport_"),
+         mean_niveau_severite_dyspareunia_cat,
+        
+         # dyschezia
+        trouble_digestif,
+        starts_with("trouble_digestif_final_"),
+        onset_age_dyschezia,
+        mean_niveau_severite_dyschezia_cat,
+        
+        # dysurenia
+        douleur_miction,
+        starts_with(c("douleur_miction_final_")),
+        onset_age_dysuria,
+        mean_niveau_severite_dysuria_cat,
+        
+        Endo_douleurs_participated,
+        
+        IdVersion,
+        Date_naissance,
+        DateValidation
+        ) %>% 
+  mutate(
+    across(c(doul_rapport_sexuel,
+                  trouble_digestif,
+                  douleur_miction,
+                  first_rapport,
+                  mean_niveau_severite_dyspareunia_cat,
+                  mean_niveau_severite_dyschezia_cat,
+                  mean_niveau_severite_dysuria_cat,
+                  onset_age_dysuria,
+                  onset_age_dyspareunia,
+                  onset_age_dyschezia
+                  ), ~
+                  case_when(
+                    is.na(IdVersion) ~ "Not_answered",
+                    TRUE  ~ .
+                  )),
+         across(starts_with("Date"), ~ 
+                  as.Date(.,format="%d/%m/%Y"))) %>% 
+  select(-IdVersion)
+```
+
+## 2) Final DataFrame with new variables  
+```{r}
+################################################################
+# Objective = creating new binary variables : 
+# - if there was a pain before registered lst pregnancy or not 
+################################################################
+#-------------------
+#    Dysmenorrhea
+#-------------------
+# 1. Create a temporary new dataframe with information of pregnancy module 
+new_dataframe <- Endo_dyspareunie_final %>% 
+  left_join(grossesse_mod_final %>% 
+              distinct(id_unik,first_preg_age,
+                       grossesse_encours),
+            by="id_unik")
+
+# 2. Create a binary variable 
+new_dataframe <- new_dataframe %>% 
+  mutate(
+    first_preg_age= first_preg_age %>% round(),
+    age_inclusion = as.numeric(as.character(
+      (DateValidation-Date_naissance)/365)) %>% round(),
+    
+    dyspareunia_avant_1_preg = case_when(
+      # No answer provided in the questionnaire
+      doul_rapport_sexuel == "Not_answered" ~ "Not_answered",
+      
+      doul_rapport_sexuel %in% c("Je ne souhaite pas répondre à ces questions",
+                                 "Je n'ai jamais eu de rapport sexuel") ~
+        "Non et nsp",
+      
+      # First pregnancy occurred after study inclusion
+      first_preg_age > age_inclusion & doul_rapport_sexuel == "Oui" ~
+        "Oui",
+      first_preg_age > age_inclusion & doul_rapport_sexuel == "Non" ~
+        "Non et nsp",
+      
+      # First pregnancy occurred before or at inclusion and no pain reported
+      first_preg_age <= age_inclusion & doul_rapport_sexuel == "Non" ~
+        "Non et nsp",
+      
+      # First pregnancy before or at inclusion and before age 15
+      first_preg_age <= age_inclusion & first_preg_age <= 15 ~ case_when(
+        doul_rapport_15 == "Oui" ~ "Oui",
+        doul_rapport_15 == "Non, pas de douleurs" ~ "Non et nsp",
+        doul_rapport_15 %in% c("Pas de rapport sexuel à cette période","Je ne me souviens plus") ~ 
+          "Non et nsp"
+      ),
+      
+      # First pregnancy between 16–20 years old
+      between(first_preg_age, 16, 20) ~ case_when(
+        first_preg_age <= age_inclusion & 
+          (doul_rapport_15 == "Oui" | 
+             doul_rapport_16 == "Oui") ~ 
+          "Oui",
+        first_preg_age < age_inclusion & 
+          doul_rapport_15 == "Non" & 
+          doul_rapport_16 == "Non, pas de douleurs" ~ 
+          "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (doul_rapport_15 %in% c("Pas de rapport sexuel à cette période","Je ne me souviens plus") |
+           doul_rapport_16 %in% c("Pas de rapport sexuel à cette période","Je ne me souviens plus")) ~ 
+          "Non et nsp"
+      ),
+      
+      # First pregnancy between 21–30 years old
+      between(first_preg_age, 21, 30) ~ case_when(
+        first_preg_age <= age_inclusion &
+          (doul_rapport_15 == "Oui" | 
+             doul_rapport_16 == "Oui" | 
+             doul_rapport_21 == "Oui") ~ 
+          "Oui",
+        first_preg_age <= age_inclusion & 
+          doul_rapport_15 == "Non, pas de douleurs" & 
+          doul_rapport_16 == "Non, pas de douleurs" & 
+          doul_rapport_21 == "Non, pas de douleurs" ~ 
+          "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (doul_rapport_15 %in%c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus") |
+             doul_rapport_16 %in% c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus") |
+             doul_rapport_21 %in% c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus")) ~
+          "Non et nsp"
+      ),
+      
+      # First pregnancy between 31–40 years old
+      between(first_preg_age, 31, 40) ~ case_when(
+        first_preg_age <= age_inclusion & 
+          (doul_rapport_15 == "Oui" | 
+             doul_rapport_16 == "Oui" | 
+             doul_rapport_21 == "Oui" | 
+             doul_rapport_31 == "Oui") ~ "Oui",
+        
+        first_preg_age <= age_inclusion &
+          doul_rapport_15 == "Non, pas de douleurs" & 
+          doul_rapport_16 == "Non, pas de douleurs" &
+          doul_rapport_21 == "Non, pas de douleurs" & 
+          doul_rapport_31 == "Non, pas de douleurs" ~ 
+          "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (doul_rapport_15 %in% c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus") |
+           doul_rapport_16 %in% c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus") |
+           doul_rapport_21 %in% c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus") |
+           doul_rapport_31 %in% c("Pas de rapport sexuel à cette période",
+                                 "Je ne me souviens plus")) ~
+          "Non et nsp"
+      ),
+      
+      # First pregnancy at or after age 41
+      first_preg_age >= 41 ~ case_when(
+        first_preg_age <= age_inclusion & 
+          (doul_rapport_15 == "Oui" | doul_rapport_16 == "Oui" |
+           doul_rapport_21 == "Oui" | doul_rapport_31 == "Oui" |
+           doul_rapport_41 == "Oui") ~ 
+          "Oui",
+        first_preg_age <= age_inclusion &
+          doul_rapport_15 == "Non, pas de douleurs" & 
+          doul_rapport_16 == "Non, pas de douleurs" &
+          doul_rapport_21 == "Non, pas de douleurs" & 
+          doul_rapport_31 == "Non, pas de douleurs" &
+          doul_rapport_41 == "Non, pas de douleurs" ~ 
+          "Non et nsp",
+        first_preg_age <= age_inclusion &
+          (doul_rapport_15 %in% 
+             c("Pas de rapport sexuel à cette période",
+               "Je ne me souviens plus") |
+           doul_rapport_16 %in% 
+             c("Pas de rapport sexuel à cette période",
+               "Je ne me souviens plus") |
+           doul_rapport_21 %in% 
+             c("Pas de rapport sexuel à cette période",
+               "Je ne me souviens plus") |
+           doul_rapport_31 %in% 
+             c("Pas de rapport sexuel à cette période",
+               "Je ne me souviens plus") |
+           doul_rapport_41 %in% 
+             c("Pas de rapport sexuel à cette période",
+               "Je ne me souviens plus")) ~
+          "Non et nsp"
+      ),
+      
+      TRUE ~ NA_character_
+      )
+    )
+
+#--------------------------------------------------------------------
+# Function : Automatically classify the presence of pain 
+# in specific age groups before the registered 1st pregnancy
+#--------------------------------------------------------------------
+# 'douleur_miction' and 'trouble_digestif' having same modalities
+#--------------------------------------------------------------------
+# 1. Create a function for classify the presence of pain
+classify_douleur_avant_1_preg <-
+  function(data,
+           var_bin_YN,
+           var_15 = NULL,
+           var_16 = NULL,
+           var_21 = NULL,
+           var_31 = NULL,
+           var_41 = NULL) {
+    data %>%
+      mutate(
+        result = case_when(
+          !!sym(var_bin_YN) == "Not_answered" ~ "Not_answered",
+          
+          first_preg_age > age_inclusion &
+            !!sym(var_bin_YN) == "Oui" ~ "Oui",
+          first_preg_age > age_inclusion &
+            !!sym(var_bin_YN) == "Non" ~ "Non et nsp",
+          
+          first_preg_age <= age_inclusion &
+            !!sym(var_bin_YN) == "Non" ~ "Non et nsp",
+          
+          first_preg_age <= age_inclusion &
+            first_preg_age <= 15 ~ case_when(
+              !!sym(var_15) == "Oui" ~ "Oui",!!sym(var_15) == "Non" ~ "Non et nsp",
+              !!sym(var_15) == "nsp" ~ "Non et nsp"
+            ),
+          
+          between(first_preg_age, 16, 20) ~ case_when(
+            first_preg_age <= age_inclusion &
+              (!!sym(var_15) == "Oui" |
+                 (!!sym(var_16) %||% "") == "Oui") ~ "Oui",
+            first_preg_age <= age_inclusion &
+              !!sym(var_15) == "Non" &
+              (!!sym(var_16) %||% "") == "Non" ~ "Non et nsp",
+            first_preg_age <= age_inclusion &
+              (!!sym(var_15) == "nsp" |
+                 (!!sym(var_16) %||% "") == "nsp") ~ "Non et nsp"
+          ),
+          
+          between(first_preg_age, 21, 30) ~ case_when(
+            first_preg_age <= age_inclusion &
+              ("Oui" %in% c(
+                !!sym(var_15), 
+                !!sym(var_16), 
+                !!sym(var_21)
+              )) ~ "Oui",
+            first_preg_age <= age_inclusion &
+              all(c(
+                !!sym(var_15), 
+                !!sym(var_16), 
+                !!sym(var_21)
+              ) == "Non") ~ "Non et nsp",
+            first_preg_age <= age_inclusion &
+              any(c(
+                !!sym(var_15), 
+                !!sym(var_16), 
+                !!sym(var_21)
+              ) == "nsp") ~ "Non et nsp"
+          ),
+          
+          between(first_preg_age, 31, 40) ~ case_when(
+            first_preg_age <= age_inclusion &
+              ("Oui" %in% c(
+                !!sym(var_15), 
+                !!sym(var_16), 
+                !!sym(var_21), 
+                !!sym(var_31)
+              )) ~ "Oui",
+            first_preg_age <= age_inclusion &
+              all(c(
+                !!sym(var_15), 
+                !!sym(var_16), 
+                !!sym(var_21), 
+                !!sym(var_31)
+              ) == "Non") ~ "Non et nsp",
+            first_preg_age <= age_inclusion &
+              any(c(
+                !!sym(var_15), 
+                !!sym(var_16), 
+                !!sym(var_21), 
+                !!sym(var_31)
+              ) == "nsp") ~ "Non et nsp"
+          ),
+          
+          first_preg_age >= 41 ~ case_when(
+            first_preg_age <= age_inclusion &
+              ("Oui" %in% c(
+                !!sym(var_15),
+                !!sym(var_16),
+                !!sym(var_21),
+                !!sym(var_31),
+                !!sym(var_41)
+              )) ~ "Oui",
+            first_preg_age <= age_inclusion &
+              all(c(
+                !!sym(var_15),
+                !!sym(var_16),
+                !!sym(var_21),
+                !!sym(var_31),
+                !!sym(var_41)
+              ) == "Non") ~ "Non et nsp",
+            first_preg_age <= age_inclusion &
+              any(c(
+                !!sym(var_15),
+                !!sym(var_16),
+                !!sym(var_21),
+                !!sym(var_31),
+                !!sym(var_41)
+              ) == "nsp") ~ "Non et nsp"
+          )
+        )
+      )
+  }
+
+# 2. Apply the new function 'classify_douleur_avant_1_preg'
+new_dataframe <- new_dataframe %>%
+  left_join(
+    classify_douleur_avant_1_preg(
+      data = new_dataframe,
+      var_bin_YN = "trouble_digestif",
+      var_15 = "trouble_digestif_final_15",
+      var_16 = "trouble_digestif_final_1620",
+      var_21 = "trouble_digestif_final_2130",
+      var_31 = "trouble_digestif_final_3140",
+      var_41 = "trouble_digestif_final_4150"
+    ) %>%
+      select(id_unik, dyschezia_avant_1_preg = result),
+    by = "id_unik"
+  ) %>% 
+  left_join(
+    classify_douleur_avant_1_preg(
+      data = new_dataframe,
+      var_bin_YN = "douleur_miction",
+      var_15 = "douleur_miction_final_15",
+      var_16 = "douleur_miction_final_1620",
+      var_21 = "douleur_miction_final_2130",
+      var_31 = "douleur_miction_final_3140",
+      var_41 = "douleur_miction_final_4150"
+    ) %>%
+      select(id_unik, dysuria_avant_1_preg = result),
+    by = "id_unik"
+  )
+
+# 3. Add new variables to the main final dataframe 
+Endo_dyspareunie_final <- new_dataframe %>% 
+  select(id_unik,
+         doul_rapport_sexuel,
+         first_rapport,
+         onset_age_dyspareunia,
+         mean_niveau_severite_dyspareunia_cat,
+         dyspareunia_avant_1_preg,
+         
+         trouble_digestif,
+         onset_age_dyschezia,
+         mean_niveau_severite_dyschezia_cat,
+         dyschezia_avant_1_preg,
+         
+         douleur_miction,
+         onset_age_dysuria,
+         mean_niveau_severite_dysuria_cat,
+         dysuria_avant_1_preg,
+         
+         Endo_douleurs_participated
+         )
+
+# 4. Delete the temporary new_dataframe
+rm(new_dataframe)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+#write.csv(Endo_dyspareunie_final,"Endo_dyspareunie_final.csv")
+```
+
+
+

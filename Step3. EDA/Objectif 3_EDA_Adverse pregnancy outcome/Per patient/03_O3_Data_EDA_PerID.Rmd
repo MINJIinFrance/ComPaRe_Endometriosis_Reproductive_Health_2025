@@ -1,0 +1,1473 @@
+---
+title: "03_O3_Data_EDA_PerID"
+author: "Minji NAM"
+date: "2025-05-19"
+output: html_document
+---
+
+*Name* : 03_O3_Data_EDA_PerID
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Obejctive 3, Data preparation and EDA for the participant population
+*Date of creation* : 2025-05-19
+*Date of update* : 2025-06-02
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(purrr) # reduce()
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gt)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+library(chromote)
+library(car)
+library(mediation)
+library(shiny)
+library(shinydashboard)
+library(data.table)
+library(DT)
+library(mice)
+library(dagitty)
+library(ggdag)
+```
+
+# I. Dataset per ID
+## 0. Import the dataset 
+
+```{r}
+df_final_complic_perID <- 
+  read.csv("C:/Stage_Master2/Stage_M2_Complic_Gross/df_final_complic_perID.csv", 
+           stringsAsFactors = TRUE) %>% 
+  dplyr::select(-X) %>% 
+  distinct()
+```
+
+## I. Data check and create new variables 
+
+
+```{r}
+#--------------------------------------------------
+#  First pregnancy age in numeric to categorical
+#--------------------------------------------------
+quantiles <- df_final_complic_perID$first_preg_age %>% 
+  quantile(probs = c(1/3,2/3), na.rm = TRUE) %>% 
+  round()
+
+df_final_complic_perID_mod <- df_final_complic_perID %>%
+  mutate(
+    first_preg_age= round(first_preg_age),
+    first_preg_age_cat= 
+      case_when(
+        first_preg_age< quantiles[[1]] ~ paste0("<", quantiles[1]),
+        first_preg_age>= quantiles[[1]] &
+          first_preg_age< quantiles[[2]] ~ paste0(quantiles[1], "-", quantiles[2]),
+        first_preg_age>= quantiles[[2]] ~ paste0(">=", quantiles[2])
+      )) %>% 
+  dplyr::select(-id_unik)
+
+rm(quantiles)
+
+
+#-----------------------------------------
+# Remove the modality of 'Not_answered' 
+#-----------------------------------------
+library(dplyr)
+library(stringr)
+
+df_final_complic_perID_mod <-
+  df_final_complic_perID_mod %>%
+  mutate(
+    across(
+      .cols = everything(),
+      .fns = ~ if (is.factor(.) || is.character(.)) {
+        if (!str_detect(cur_column(), "_participated$")) {
+          na_if(as.character(.), "Not_answered")
+        } else {
+          .
+        }
+      } else {
+        .
+      }
+    ),
+    across(
+      .cols = where(is.character),
+      .fns = as.factor
+    )
+  )
+
+# Check
+# sapply(df_final_complic_perID_mod, function(x) unique(x))
+
+#------------------------------------
+#    Impacted or removed ovaries  
+#------------------------------------
+df_final_complic_perID_mod <-
+  df_final_complic_perID_mod %>%
+  mutate(
+    indic_ovaire_touche=
+      case_when(
+        indic_ovaire_touche=="Ovaire touchée"~ "Oui",
+        indic_ovaire_touche!="Ovaire touchée" &
+          !is.na(indic_ovaire_touche) ~ "Non",
+        TRUE ~ NA
+        )
+    )
+```
+
+## II. EDA 
+**1. Data strucutre**
+install.packages("prettyR")
+library(prettyR)
+describe(data)
+
+**2. Data type**
+- sapply(data, class)
+
+**3. Check basic statistics and distribution**
+- Summary of numeric data
+- Count and proportion
+- Histogram
+- Boxplot
+
+**4. Correlation analysis**
+- Correlation Matrix and Visualisation
+
+### 1) gtsummary
+-  2 groups : Complication Yes/No per participant
+
+```{r}
+library(gtsummary)
+
+df_final_complic_perID_mod %>%
+  dplyr::select(-total_complications_cat_perID,
+                -Complications_cat_perID_grouped)%>%
+  tbl_summary(
+    by = total_complications_bin_perID,
+    statistic = list(all_continuous() ~ "{mean} ({sd})",  
+                     all_categorical() ~ "{n} ({p}%)"),    
+    missing = "ifany" 
+  ) %>%
+  # add_n() %>%                
+  # add_p() %>%               
+  bold_labels()    
+```
+
+-  3 groups : Number of obstetric complications 0 vs 1 vs 2+ per participant
+
+```{r}
+library(gtsummary)
+
+df_final_complic_perID_mod %>%
+  dplyr::select(-total_complications_bin_perID,
+                -Complications_cat_perID_grouped)%>%
+  tbl_summary(
+    by = total_complications_cat_perID,
+    statistic = list(all_continuous() ~ "{mean} ({sd})",  
+                     all_categorical() ~ "{n} ({p}%)"),    
+    missing = "ifany" 
+  ) %>%
+  # add_n() %>%                
+  # add_p() %>%               
+  bold_labels()    
+```
+
+### 2) ShinyR : Distribution (Numeric, Categoric), Correlatoin, NA values
+- R Shiny App for Data Distribution Visualization
+
+#### * UI
+```{r}
+#--------
+#   UI
+#--------
+ui <- dashboardPage(
+  dashboardHeader(title = "O3 : Data Distribution Viewer"),
+  dashboardSidebar(sidebarMenu(
+    menuItem(
+      "Numeric Variables",
+      tabName = "numeric",
+      icon = icon("chart-line")
+    ),
+    menuItem(
+      "Categorical Variables",
+      tabName = "categorical",
+      icon = icon("bar-chart")
+    ),
+    menuItem(
+      "Missing Values Analysis",
+      tabName = "missing",
+      icon = icon("table")
+    ),
+    # New Menu Item for Correlation
+    menuItem(
+      "Variable Correlation",
+      tabName = "correlation",
+      icon = icon("link")
+    ),
+    menuItem(
+      "Data Table",
+      tabName = "datatable",
+      icon = icon("table"))
+  )),
+  dashboardBody(tabItems(
+    #-----------------------
+    # Numeric variables tab
+    #-----------------------
+    tabItem(tabName = "numeric", fluidRow(
+      box(
+        title = "Select Numeric Variable",
+        status = "primary",
+        solidHeader = TRUE,
+        selectInput("numericVar", "Choose variable:",
+                    choices = NULL)
+      ),
+      box(
+        title = "Summary Statistics",
+        status = "primary",
+        solidHeader = TRUE,
+        verbatimTextOutput("numericSummary")
+      )
+    ), fluidRow(
+      box(
+        title = "Box Plot",
+        status = "primary",
+        solidHeader = TRUE,
+        plotOutput("boxPlot")
+      ),
+      box(
+        title = "Histogram",
+        status = "primary",
+        solidHeader = TRUE,
+        plotOutput("histPlot")
+      )
+    )),
+    #----------------------------
+    # Categorical variables tab
+    #----------------------------
+    tabItem(tabName = "categorical", fluidRow(
+      box(
+        title = "Select Categorical Variable",
+        status = "success",
+        solidHeader = TRUE,
+        selectInput("categoricalVar", "Choose variable:",
+                    choices = NULL)
+      ),
+      box(
+        title = "Bar Plot",
+        status = "success",
+        solidHeader = TRUE,
+        plotOutput("barPlot")
+      )
+    ), fluidRow(
+      box(
+        title = "Frequency Table",
+        status = "success",
+        solidHeader = TRUE,
+        width = 12,
+        dataTableOutput("freqTable")
+      )
+    )),
+    #-------------
+    # NA analysis
+    #-------------
+    tabItem(tabName = "missing", fluidRow(
+      box(
+        title = "Missing Values Summary",
+        status = "warning",
+        solidHeader = TRUE,
+        width = 12,
+        dataTableOutput("missingTable")
+      )
+    ), fluidRow(
+      box(
+        title = "Missing Values Visualization",
+        status = "warning",
+        solidHeader = TRUE,
+        width = 12,
+        plotOutput("missingPlot", height = "600px")
+      )
+    )),
+    #-------------------------
+    # Correlation analysis tab
+    #-------------------------
+    tabItem(tabName = "correlation",
+            fluidRow(
+              box(
+                title = "Select Analysis Type",
+                status = "info",
+                solidHeader = TRUE,
+                width = 12,
+                selectInput("correlationType", "Choose Analysis:",
+                            choices = c("Numeric vs Numeric",
+                                        "Categorical vs Categorical",
+                                        "Numeric vs Categorical"))
+              )
+            ),
+            # Conditional UI based on analysis type
+            uiOutput("correlationUI")
+    ),
+    #----------------
+    # Data table tab
+    #----------------
+    tabItem(
+      tabName = "datatable",
+      box(
+        title = "Data Table",
+        status = "warning",
+        solidHeader = TRUE,
+        width = 12,
+        dataTableOutput("fullDataTable")
+      )
+    )
+  ))
+)
+```
+
+#### * Server
+```{r}
+#-------------------
+# Define the data 
+#-------------------
+data <- df_final_complic_perID_mod
+
+#---------
+# Server
+#---------
+# Change the dataset
+server <- function(input, output, session) {
+
+  # Reactive values to store column names
+  col_types <- reactiveValues(numeric = NULL, categorical = NULL)
+
+  #------------------------------------------
+  # Identify numeric and categorical columns
+  #------------------------------------------
+  observe({
+    req(data) # Ensure data is loaded
+
+    is_numeric_col <- sapply(data,
+                             function(x) is.numeric(x) && !is.factor(x))
+
+    col_types$numeric <- names(data)[is_numeric_col]
+    col_types$categorical <- names(data)[!is_numeric_col]
+
+    # Update select inputs for existing tabs
+    updateSelectInput(session, "numericVar",
+                      choices = col_types$numeric)
+    updateSelectInput(session, "categoricalVar",
+                      choices = col_types$categorical)
+  })
+
+  #-------------------------------------
+  # Original Tab Outputs (Existing code)
+  #-------------------------------------
+
+  # Histogram for numeric variables
+  output$histPlot <- renderPlot({
+    req(input$numericVar, data)
+    ggplot(data, aes_string(x = input$numericVar)) +
+      geom_histogram(fill = "steelblue", color = "white", bins = 30) +
+      labs(title = paste("Distribution of", input$numericVar),
+           x = input$numericVar, y = "Frequency") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+  # Box plot for numeric variables
+  output$boxPlot <- renderPlot({
+    req(input$numericVar, data)
+    ggplot(data, aes_string(y = input$numericVar)) +
+      geom_boxplot(fill = "steelblue") +
+      labs(title = paste("Box Plot of", input$numericVar),
+           x = "", y = input$numericVar) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+  # Summary statistics for numeric variables
+  output$numericSummary <- renderPrint({
+    req(input$numericVar, data)
+    summary(data[[input$numericVar]])
+  })
+
+  # Bar plot for categorical variables
+  output$barPlot <- renderPlot({
+    req(input$categoricalVar, data)
+    var_sym <- sym(input$categoricalVar)
+
+    freq_data <- data %>%
+      filter(!is.na(!!var_sym)) %>% # Exclude NA for counting
+      count(!!var_sym) %>%
+      arrange(desc(n))
+
+    # Limit to top 20 + "Others"
+    if (nrow(freq_data) > 20) {
+        top_20 <- freq_data[1:20, ]
+        others_n <- sum(freq_data[21:nrow(freq_data), ]$n)
+        # Ensure correct structure for rbind
+        others_row <- tibble(!!var_sym := factor("Others", levels=c(levels(top_20[[1]]),"Others")), n = others_n)
+        freq_data <- rbind(top_20, others_row)
+        freq_data[[1]] <- factor(freq_data[[1]], levels = c(as.character(top_20[[1]]), "Others")) # Set factor levels for plotting order
+         freq_data$n <- as.numeric(freq_data$n)
+    } else {
+       freq_data[[1]] <- factor(freq_data[[1]], levels = as.character(freq_data[[1]])) # Ensure factor for consistent plotting
+    }
+
+
+    ggplot(freq_data, aes(x = !!var_sym, y = n)) + # Use original factor levels for order
+      geom_bar(stat = "identity", fill = "darkgreen") +
+      labs(
+        title = paste("Distribution of", input$categoricalVar),
+        x = input$categoricalVar,
+        y = "Count"
+      ) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5),
+            axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+
+  # Frequency table for categorical variables
+  output$freqTable <- renderDataTable({
+    req(input$categoricalVar, data)
+    data %>%
+      count(!!sym(input$categoricalVar)) %>%
+      mutate(Percentage = round(n / sum(n) * 100, 2)) %>%
+      arrange(desc(n)) %>%
+      rename(Category = 1, Count = n) %>%
+      datatable(options = list(pageLength = 10))
+  })
+
+  # NA analysis table
+  output$missingTable <- renderDataTable({
+    req(data)
+    na_summary <- data.frame(
+      Variable = names(data),
+      Type = sapply(data, function(x) ifelse(is.numeric(x) && !is.factor(x), "Numeric", "Categorical")),
+      Missing_Count = sapply(data, function(x) sum(is.na(x))),
+      Missing_Percent = sapply(data, function(x) round(sum(is.na(x)) / length(x) * 100, 2))
+    )
+    na_summary <- na_summary[order(-na_summary$Missing_Count), ]
+    datatable(na_summary, options = list(pageLength = 20), rownames = FALSE)
+  })
+
+  # NA value visualisation
+  output$missingPlot <- renderPlot({
+    req(data)
+    na_summary <- data.frame(
+      Variable = names(data),
+      Missing_Percent =
+        sapply(data,
+               function(x) sum(is.na(x)) / length(x) * 100)
+    ) %>% filter(Missing_Percent > 0) # Only show vars with missing values
+
+    if(nrow(na_summary) == 0) return(NULL) # Don't plot if no missing values
+
+    na_summary <- na_summary[order(-na_summary$Missing_Percent), ]
+
+    if(nrow(na_summary) > 30) {
+      na_summary <- na_summary[1:30, ]
+    }
+
+    na_summary$color <- cut(
+      na_summary$Missing_Percent,
+      breaks = c(-1, 0.00001, 10, 30, 50, 101), # Adjusted breaks for >0
+      labels = c("darkgreen", "green", "orange", "red", "darkred"),
+      right = FALSE
+    )
+
+    ggplot(na_summary, aes(
+      x = reorder(Variable, Missing_Percent),
+      y = Missing_Percent,
+      fill = color
+    )) +
+      geom_bar(stat = "identity") +
+      geom_text(aes(label=sprintf("%.1f%%", Missing_Percent)), hjust=-0.1, size=3.5) + # Add percentage labels
+      scale_fill_identity() +
+      coord_flip() + # Flip coordinates for better readability
+      labs(title = "Missing Values by Variable (Top 30 with Missing Data)",
+           x = "Variable", y = "Missing Values (%)") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  }, height = 600) # Adjust height dynamically maybe?
+
+
+  # Full data table
+  output$fullDataTable <- renderDataTable({
+    req(data)
+    datatable(data, options = list(
+      pageLength = 10,
+      scrollX = TRUE
+    ))
+  })
+
+  #-------------------------------
+  # Correlation Tab Server Logic
+  #-------------------------------
+  # Dynamic UI for correlation analysis based on type selection
+  output$correlationUI <- renderUI({
+    req(input$correlationType, col_types$numeric, col_types$categorical)
+
+    if (input$correlationType == "Numeric vs Numeric") {
+      tagList(
+        fluidRow(
+          box(
+            title = "Select Variables", status = "info", solidHeader = TRUE, width = 6,
+            selectInput("numVar1", "Numeric Variable 1:", choices = col_types$numeric),
+            selectInput("numVar2", "Numeric Variable 2:", choices = col_types$numeric, selected = if(length(col_types$numeric)>1) col_types$numeric[2] else NULL)
+          ),
+          box(
+            title = "Correlation Coefficient", status = "info", solidHeader = TRUE, width = 6,
+            verbatimTextOutput("numNumCorr")
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Scatter Plot", status = "info", solidHeader = TRUE, width = 12,
+            plotOutput("numNumPlot")
+          )
+        )
+      )
+    } else if (input$correlationType == "Categorical vs Categorical") {
+      tagList(
+          fluidRow(
+            box(
+                title = "Select Variables", status = "info", solidHeader = TRUE, width = 12,
+                selectInput("catVar1", "Categorical Variable 1:", choices = col_types$categorical),
+                selectInput("catVar2", "Categorical Variable 2:", choices = col_types$categorical, selected = if(length(col_types$categorical)>1) col_types$categorical[2] else NULL)
+            )
+         ),
+        fluidRow(
+          box(
+            title = "Contingency Table", status = "info", solidHeader = TRUE, width = 6,
+             DT::dataTableOutput("catCatTable") # Use DT for consistency
+          ),
+          box(
+            title = "Chi-Squared Test", status = "info", solidHeader = TRUE, width = 6,
+            verbatimTextOutput("catCatTest")
+          )
+        ),
+         fluidRow(
+            box(
+                title = "Association Plot", status = "info", solidHeader = TRUE, width = 12,
+                plotOutput("catCatPlot")
+            )
+         )
+      )
+    } else if (input$correlationType == "Numeric vs Categorical") {
+      tagList(
+        fluidRow(
+            box(
+                title = "Select Variables", status = "info", solidHeader = TRUE, width = 12,
+                selectInput("numVarCorr", "Numeric Variable:", choices = col_types$numeric),
+                selectInput("catVarCorr", "Categorical Variable:", choices = col_types$categorical)
+            )
+        ),
+        fluidRow(
+          box(
+            title = "Grouped Box Plot", status = "info", solidHeader = TRUE, width = 6,
+            plotOutput("numCatPlot")
+          ),
+          box(
+            title = "ANOVA Summary", status = "info", solidHeader = TRUE, width = 6,
+            verbatimTextOutput("numCatTest")
+          )
+        )
+      )
+    }
+  })
+
+  # --- Numeric vs Numeric ---
+  output$numNumPlot <- renderPlot({
+    req(input$numVar1, input$numVar2, data)
+    # Ensure different variables are selected
+    if (input$numVar1 == input$numVar2) {
+        plot(0, type='n', axes=FALSE, ann=FALSE)
+        text(1, 0, "Please select two different numeric variables.", cex = 1.2)
+        return()
+    }
+
+    ggplot(data, aes_string(x = input$numVar1, y = input$numVar2)) +
+      geom_point(alpha = 0.6) +
+      geom_smooth(method = "lm", se = FALSE, color = "red") + # Add linear regression line
+      labs(title = paste("Scatter Plot:", input$numVar1, "vs", input$numVar2),
+           x = input$numVar1, y = input$numVar2) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+  output$numNumCorr <- renderPrint({
+      req(input$numVar1, input$numVar2, data)
+      # Ensure different variables are selected
+      if (input$numVar1 == input$numVar2) {
+          cat("Please select two different numeric variables.")
+          return()
+      }
+
+      # Calculate Pearson correlation, handling potential NAs
+      cor_test_result <- tryCatch({
+          # Ensure we use pairwise complete observations for robustness
+          cor.test(data[[input$numVar1]], data[[input$numVar2]], method = "pearson", use = "pairwise.complete.obs")
+      }, error = function(e) {
+          # Return a structure indicating error
+          list(estimate = NA, p.value = NA, error_message = conditionMessage(e))
+      })
+
+      cat("Pearson Correlation Analysis\n")
+      cat("----------------------------\n")
+      cat("Variable 1:", input$numVar1, "\n")
+      cat("Variable 2:", input$numVar2, "\n\n")
+
+      # Check for errors during calculation
+      if (!is.null(cor_test_result$error_message)) {
+          cat("Error calculating correlation:", cor_test_result$error_message, "\n")
+          cat("Note: Correlation could not be computed (check for NAs or lack of variance).\n")
+      } else if (is.na(cor_test_result$estimate) || is.na(cor_test_result$p.value)) {
+          cat("Correlation Coefficient (r): NA\n")
+          cat("P-value: NA\n")
+          cat("Note: Correlation could not be computed (likely due to extensive NA values or lack of variance).\n")
+      } else {
+          r_value <- cor_test_result$estimate
+          p_value <- cor_test_result$p.value
+          abs_r <- abs(r_value)
+
+          # Determine correlation strength
+          strength <- cut(abs_r,
+                          breaks = c(-0.01, 0.10, 0.30, 0.50, 0.70, 1.00), 
+                          labels = c("Very weak / none", "Weak", "Moderate", "Strong", "Very strong"),
+                          right = TRUE) # Intervals are (lower, upper]
+
+          cat("Correlation Coefficient (r):", round(r_value, 3), "\n")
+          cat("Strength of Correlation:", as.character(strength), "\n") # Display strength
+          cat("P-value:", format.pval(p_value, digits = 3, eps = 0.001), "\n")
+
+          # Interpret significance
+          if (p_value < 0.05) {
+              cat("Significance: Statistically significant correlation (p < 0.05)\n")
+          } else {
+              cat("Significance: No statistically significant correlation (p >= 0.05)\n")
+          }
+      }
+  })
+
+  # --- Categorical vs Categorical ---
+   cat_cat_data <- reactive({
+       req(input$catVar1, input$catVar2, data)
+       # Ensure different variables are selected
+       if (input$catVar1 == input$catVar2) return(NULL)
+
+       # Create contingency table, handling NAs by default (table removes them)
+        cont_table <- table(data[[input$catVar1]], data[[input$catVar2]])
+
+       # Check if table has dimensions before proceeding
+        if (nrow(cont_table) < 2 || ncol(cont_table) < 2) {
+            return(list(table = NULL, test = NULL, plot_data = NULL, message="Requires at least 2 levels in each variable after removing NA"))
+        }
+
+        # Perform Chi-squared test
+        chi_test <- tryCatch({
+            chisq.test(cont_table)
+        }, warning = function(w) {
+            # Capture warning (e.g., expected frequencies < 5)
+            list(test = chisq.test(cont_table, simulate.p.value = TRUE), # Try simulation if needed
+                 warning_message = paste("Chi-squared test warning:", conditionMessage(w)))
+        }, error = function(e) {
+            list(test = NULL, error_message = paste("Chi-squared test error:", conditionMessage(e)))
+        })
+
+        # Prepare data for ggplot (stacked bar chart)
+        plot_df <- as.data.frame(cont_table)
+        names(plot_df) <- c("Var1", "Var2", "Freq")
+
+
+       list(table = cont_table, test_result = chi_test, plot_data = plot_df, message=NULL)
+   })
+
+
+  output$catCatTable <- DT::renderDataTable({
+      result <- cat_cat_data()
+      req(result)
+      if(!is.null(result$message)){
+           # Display message instead of table if invalid
+           return(datatable(data.frame(Message = result$message)))
+      }
+      req(result$table)
+      # Convert table to data frame for DT
+      df_table <- as.data.frame.matrix(result$table)
+      # Add row names as a column
+      df_table <- cbind(Category1 = rownames(df_table), df_table)
+      rownames(df_table) <- NULL # Remove row names for cleaner look
+
+      datatable(df_table, options = list(pageLength = 5, scrollX = TRUE), caption = paste("Contingency Table:", input$catVar1, "vs", input$catVar2))
+  })
+
+  output$catCatTest <- renderPrint({
+      result <- cat_cat_data()
+      req(result)
+
+      if(!is.null(result$message)){
+          cat(result$message)
+          return()
+      }
+
+      if (input$catVar1 == input$catVar2) {
+        cat("Please select two different categorical variables.")
+        return()
+      }
+
+      req(result$test_result)
+
+      cat("Chi-Squared Test of Independence\n")
+      cat("--------------------------------\n")
+      cat("Variable 1:", input$catVar1, "\n")
+      cat("Variable 2:", input$catVar2, "\n\n")
+
+      if (!is.null(result$test_result$error_message)) {
+          cat(result$test_result$error_message, "\n")
+      } else {
+           test_output <- result$test_result$test %||% result$test_result # Handle potential list structure from warning
+           print(test_output)
+           if (!is.null(result$test_result$warning_message)) {
+                cat("\nWarning:", result$test_result$warning_message, "\n")
+                if(grepl("simulate.p.value", result$test_result$warning_message)){
+                     cat("P-value was simulated due to low expected frequencies.\n")
+                }
+           }
+           if (test_output$p.value < 0.05) {
+             cat("\nResult: Significant association (p < 0.05)\n")
+           } else {
+             cat("\nResult: No significant association (p >= 0.05)\n")
+           }
+      }
+      # Helper function to handle NULL
+      `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+
+  })
+
+   output$catCatPlot <- renderPlot({
+        result <- cat_cat_data()
+        req(result)
+
+        if (input$catVar1 == input$catVar2) {
+            plot(0, type='n', axes=FALSE, ann=FALSE)
+            text(1, 0, "Please select two different categorical variables.", cex = 1.2)
+            return()
+        }
+
+        if(!is.null(result$message)){
+            plot(0, type='n', axes=FALSE, ann=FALSE)
+            text(1, 0, result$message, cex = 1.2)
+           return()
+       }
+
+        req(result$plot_data)
+        df_plot <- result$plot_data
+
+       # Use ggplot for a stacked bar chart or heatmap
+        ggplot(df_plot, aes(x = Var1, y = Freq, fill = Var2)) +
+            geom_bar(stat = "identity", position = "fill") + # position="fill" shows proportions
+            scale_y_continuous(labels = scales::percent_format()) +
+            labs(title = paste("Proportional Stacked Bar Chart:", input$catVar1, "vs", input$catVar2),
+                 x = input$catVar1,
+                 y = "Proportion",
+                 fill = input$catVar2) +
+            theme_minimal() +
+            theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                  plot.title = element_text(hjust = 0.5))
+
+   })
+
+
+  # --- Numeric vs Categorical ---
+   num_cat_data <- reactive({
+        req(input$numVarCorr, input$catVarCorr, data)
+
+        num_var <- input$numVarCorr
+        cat_var <- input$catVarCorr
+
+        # Check number of levels in categorical variable after removing NAs for both vars
+        valid_data <- data %>%
+            filter(!is.na(.data[[num_var]]) & !is.na(.data[[cat_var]]))
+        
+        n_levels <- length(unique(valid_data[[cat_var]]))
+
+        if (n_levels < 2) {
+            return(list(plot_data=NULL, test=NULL, message="Categorical variable must have at least 2 levels with non-NA numeric data."))
+        }
+
+        # Perform ANOVA
+        formula_str <- paste("`",num_var, "` ~ `", cat_var,"`", sep="") #Use backticks for non-standard names
+        anova_test <- tryCatch({
+            summary(aov(as.formula(formula_str), data = data))
+        }, error = function(e) {
+            list(error_message = paste("ANOVA error:", conditionMessage(e)))
+        })
+
+        list(plot_data = valid_data, test_result = anova_test, message=NULL)
+   })
+
+
+  output$numCatPlot <- renderPlot({
+      result <- num_cat_data()
+       req(result)
+
+      if(!is.null(result$message)){
+           plot(0, type='n', axes=FALSE, ann=FALSE)
+           text(1, 0, result$message, cex = 1.2)
+           return()
+       }
+       req(result$plot_data)
+       df_plot <- result$plot_data
+       num_var <- input$numVarCorr
+       cat_var <- input$catVarCorr
+
+       ggplot(df_plot, aes_string(x = cat_var, y = num_var, fill = cat_var)) +
+         geom_boxplot(show.legend = FALSE) + # Fill by category for distinction
+         labs(title = paste("Box Plot:", num_var, "by", cat_var),
+              x = cat_var, y = num_var) +
+         theme_minimal() +
+         theme(axis.text.x = element_text(angle = 45, hjust = 1),
+               plot.title = element_text(hjust = 0.5))
+  })
+
+  output$numCatTest <- renderPrint({
+      result <- num_cat_data()
+      req(result)
+
+       if(!is.null(result$message)){
+           cat(result$message)
+           return()
+       }
+      req(result$test_result)
+
+
+      cat("ANOVA (Analysis of Variance)\n")
+      cat("----------------------------\n")
+      cat("Dependent Variable (Numeric):", input$numVarCorr, "\n")
+      cat("Independent Variable (Categorical):", input$catVarCorr, "\n\n")
+
+      if (!is.null(result$test_result$error_message)) {
+          cat(result$test_result$error_message, "\n")
+      } else {
+          anova_summary <- result$test_result
+          print(anova_summary)
+
+          # Extract p-value
+          p_value <- tryCatch(anova_summary[[1]]$`Pr(>F)`[1], error = function(e) NA)
+
+          if (is.na(p_value)) {
+              cat("\nCould not extract p-value from ANOVA summary.\n")
+          } else if (p_value < 0.05) {
+            cat("\nResult: Significant difference in means across groups (p < 0.05)\n")
+          } else {
+            cat("\nResult: No significant difference in means across groups (p >= 0.05)\n")
+          }
+          cat("\nNote: ANOVA assumes normality of residuals and homogeneity of variances.\n")
+          cat("Consider checking assumptions or using non-parametric alternatives (e.g., Kruskal-Wallis) if assumptions are violated.\n")
+      }
+  })
+
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+```
+
+### 3) Correlation between all numeric data
+- Removing correlated variables
+
+##### * Numeric data 
+- There is a correlation between the age at the inclusion of the study and the maternal age at the first pregnancy (0.6014242), so it would be better to select one numeric variable.
+- However, I'd like to use the maternal age variable as well, so I transformed this numeric variable into a categorical one. Then, I will check for multicollinearity to see if I can include this variable.
+
+```{r}
+#-------------------------
+#   0. Define the data 
+#-------------------------
+data <- df_final_complic_perID_mod
+
+#--------------------------------
+#  1.  Identify numeric columns
+#--------------------------------
+is_numeric_col <- sapply(data,
+                         function(x) is.numeric(x) &&
+                           !is.factor(x))
+numeric_columns <- names(data)[is_numeric_col]
+
+#--------------------------
+#  2. Correlation Matrix
+#---------------------------
+cor_matrix <- cor(data[, numeric_columns],
+                  use="complete.obs")
+
+cor.test(data[, numeric_columns]$age, data[, numeric_columns]$first_preg_age) #cor = 0.3776304 (p<0.05)
+
+#--------------------
+# 3. Visualisation
+#--------------------
+library(corrplot)
+corrplot(cor_matrix, method="circle")
+```
+
+=> Eliminating Correlated Variables
+
+#### => Eliminate correlated variable
+
+```{r}
+df_final_complic_perID_mod2 <- df_final_complic_perID_mod %>% 
+  dplyr::select(-first_preg_age)
+```
+
+### 3) Outlier 
+
+- Already done in preprocessing data
+- In the final dataframe, all numeric data don't have any outliers to treat
+
+### 4) Treatment of Missing Data
+
+- Check missing data : library(naniar);library(VIM);library(visdat); library(smdi)
+- smdi_rf (MNAR, MCAR, MAR) -> visualisation (md.pattern) -> Imputation (mice or MissForest) -> Analysis modeling -> pooling 
+
+#### - Missing Data Check
+diplome_ini2,age,gynecologique_diseases,comorbidities_bin,
+endo_ade_categorie,age_firstOP_endoadeno_catindic_ovaire_touche,age_regle_cat_simple,doul_abdo_avant_1_preg,nb_live_births_all,history_FC_preterm_IVGIMG_perID ,first_preg_age,Mode_accouchement_perID,Travail_accouchement_perID,methode_conception_perID_cat_simple_mod
+
+```{r}
+##############################################
+# For the multivariable model for my memoire
+##############################################
+data <- df_final_complic_perID_mod %>%
+  filter(!is.na(total_complications_bin_perID)) # exclusion
+
+
+
+data %>% colnames
+# Final model : outcome + covariables  
+all_var <- c(
+  "diplome_ini2",
+  "age",
+  "gynecologique_diseases",
+  "nb_mal_sansEndoAde_cat",
+  "endo_ade_categorie",
+  "age_firstOP_endoadeno_cat",
+  "indic_ovaire_touche",
+  "age_regle_cat_simple",
+  "doul_abdo_avant_1_preg",
+  "nb_live_births_all",
+  "history_FC_preterm_IVGIMG_perID",
+  "first_preg_age",
+  "Mode_accouchement_perID",
+  "Travail_accouchement_perID",
+  "methode_conception_perID_cat_simple_mod"
+)
+
+# Complete cases proportion = 98.4 % (305/310)
+sum(complete.cases(data[all_var]))/ nrow(data[all_var]) *100
+
+data <- data[all_var]
+miss_summary <- tibble(
+  variable = names(data),
+  count = colSums(is.na(data)),
+  percent = round(colMeans(is.na(data)) * 100,1)
+) %>%
+  arrange(desc(percent)) ; miss_summary
+miss_summary
+```
+
+
+##### - Proportion and visualization
+
+```{r}
+#-----------------------
+#  Define the data 
+#-----------------------
+data <- df_final_complic_perID %>% 
+  filter(!is.na(total_complications_bin_perID))
+
+#-------------------------------
+#   Summary of missing data
+#-------------------------------
+miss_summary <- tibble(
+  variable = names(data),
+  count = colSums(is.na(data)),
+  percent = round(colMeans(is.na(data)) * 100,1)
+) %>%
+  arrange(desc(percent)) ; miss_summary
+
+#--------------------------------
+#   Interactive plot : Plotly
+#--------------------------------
+library(plotly)
+plot_ly(miss_summary %>% slice_max(order_by = percent, n = 25), 
+        x = ~variable, y = ~ percent, 
+        type = "bar", text= ~ percent,
+        marker = list(color = "steelblue")) %>%
+  layout(title = "Top 25 : Proportion of missing data per variable",
+         xaxis = list(title = ""),
+         yaxis = list(title = "Missing data prop (%)"))
+
+#--------------------------------
+# Visualisation : naniar library 
+#--------------------------------
+library(naniar)
+gg_miss_var(data) +
+  labs(y = "NA counts", x = "Variable")
+
+# # Missing data pattern correlation heatmap between variables
+# gg_miss_upset(df_final_LB_1_mod2)
+
+#--------------------------
+# Visualisation : ggplot 
+#--------------------------
+na_summary_df <- data.frame(
+      Variable = names(data),
+      Missing_Percent =
+        sapply(data,
+               function(x) round(sum(is.na(x)) / length(x) * 100,1))
+    ) %>% 
+  filter(Missing_Percent > 0) %>% 
+  arrange(desc(Missing_Percent)) %>% 
+  slice_max(Missing_Percent, n = 35) %>%  # Top 35
+  mutate(
+    color= cut(
+      Missing_Percent,
+      breaks = c(-1, 0.00001, 10, 30, 50, 101),
+      labels = c("darkgreen", "green", "orange", "red", "darkred"),
+      right = FALSE
+    )
+  )
+
+ggplot(na_summary_df, aes(
+  x = reorder(Variable, Missing_Percent), 
+  y = Missing_Percent,
+  fill = color)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label=Missing_Percent), hjust=-0.1, size=3.5) +
+  scale_fill_identity() +
+  coord_flip() +
+  labs(title = "Missing Values by Variable (Top 35)",
+       x = "Variable", y = "Missing Values (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+##### => Eliminate variables with a lot of NA 
+For the final sub-population (n=310)
+- PriseenCharge_cat_perID : 94 %
+- trompe_anomalie : 55.5 %
+
+```{r}
+df_final_complic_perID_mod2 <- df_final_complic_perID_mod2 %>% 
+  dplyr::select(-trompe_anomalie,-PriseenCharge_cat_perID)
+```
+
+
+##### - Pattern and mechanism check
+
+```{r}
+data <- df_final_complic_perID_mod2
+
+# 0. Find variables with missing values
+missing_summary <- data %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+# Get names of variables with missing data
+vars_with_missing <- missing_summary$variable
+vars_with_missing <-  vars_with_missing[-c(1,2,3)] ; vars_with_missing
+
+
+#-----------------
+#    VIM::aggr
+#-----------------
+# 한눈에 결측률과 패턴 파악 가능
+# 각 변수의 결측률과 조합 패턴을 동시에 보고 싶을 때
+library(VIM)
+VIM::aggr(data[,vars_with_missing], 
+          col = c('navyblue','red'), 
+          numbers = TRUE, 
+          sortVars = TRUE)
+
+VIM::aggr(data[,vars_with_missing], 
+     col = c('navyblue', 'yellow', 'red'), 
+     numbers = TRUE,        # 개수 표시
+     sortVars = TRUE,       # 변수 정렬
+     labels = names(data),  # 라벨 지정
+     cex.axis = 0.7,       # 축 글자 크기
+     gap = 3)              # 그래프 간격
+
+# library(VIM)
+# matrixplot(data[,vars_with_missing], sortby = "VD_perID")
+
+# marginplot(data[, c("first_preg_age_cat", "Mode_accouchement_perID")])
+
+#-------------------
+# mice::md.pattern
+#-------------------
+# 1. Monotonicity : monotone vs non monotone
+library(mice)
+md.pattern(data[,vars_with_missing], 
+           plot = TRUE,
+           rotate.names = TRUE)
+
+library(naniar)
+naniar::vis_miss(data[,vars_with_missing], 
+                 cluster = TRUE)
+
+#--------------------------------------------
+# naniar::mcar_test() (Little's MCAR Test)
+#--------------------------------------------
+#  결측값이 완전히 무작위(MCAR)인지 검정
+# 결측 메커니즘(MCAR vs MAR vs MNAR) 판단 시
+# 표본 크기가 작으면 검정력이 낮음
+# - MCAR 기각 ≠ MNAR (MAR일 수도 있음)
+# - 모든 변수가 수치형이어야 함 (범주형 변수는 사전 처리 필요)
+#
+library(naniar)
+mcar_test(data[,vars_with_missing])
+
+#-----------------------------------
+# `finalfit::missing_pattern()`
+#------------------------------------
+#install.packages("finalfit")
+library(finalfit)
+data %>% missing_pattern()
+
+# 그룹별 분석
+data %>% 
+  group_by(total_complications_bin_perID) %>% 
+  missing_pattern()
+
+#----------------------------
+#  `mice::flux()`
+#-------------------------
+# 결측 데이터의 influx와 outflux 측정
+# 언제 사용하나?
+# - 변수 간 결측값 예측 관계 파악 시
+# - Imputation 순서 결정 시
+# - 변수 선택 및 제거 결정 시
+library(mice)
+# Influx: 다른 변수들이 해당 변수 예측에 기여하는 정도
+# Outflux: 해당 변수가 다른 변수들 예측에 기여하는 정도
+flux_result <- flux(data);flux_result
+
+# 시각화
+fluxplot(data)
+
+#---------------
+# `Hmisc::naclus()`
+#-------------------
+# **용도**: 결측 패턴의 클러스터링 분석
+# **언제 사용하나?**
+# - 복잡한 결측 패턴을 그룹화하고 싶을 때
+# - 결측값의 숨겨진 구조 탐지 시
+# - 대용량 데이터의 결측 패턴 요약 시
+#install.packages("Hmisc")
+library(Hmisc)
+na_cluster <- naclus(data)
+plot(na_cluster)
+naplot(na_cluster)
+
+#-----------------------
+# `smdi` 패키지 함수들
+#--------------------------
+# 용도: Structural Missing Data Investigation
+# **언제 사용하나?**
+# - 결측값의 구조적 특성 정량화 시
+# - MAR assumption 검증 시
+#- 결측값 편향(bias) 평가 시
+
+library(smdi)
+# 결측 패턴의 구조적 특성 분석
+smdi_asmd(data)          # Absolute Standardized Mean Differences
+smdi_hotelling(data)     # Hotelling's T-squared test
+smdi_little(data)        # Little's test (enhanced version)
+smdi_rf(data)           # Random Forest approach
+```
+
+
+```{r}
+#-----------------------
+#  Define the data 
+#-----------------------
+data <- df_final_complic_perID_mod2
+
+#---------------------------------------
+# Check MCAR for only continuous data
+#---------------------------------------
+#install.packages("MissMech")
+library(MissMech)
+# 1. Only numeric data
+df_numeric <- data %>% 
+  dplyr::select(where(is.numeric))
+
+# 2. TestMCARNormality 
+#TestMCARNormality(df_numeric)
+# - interpretation : Probablement MCAR (p>0.05)
+
+# naniar : mcar_test
+library(naniar)
+mcar_test(df_numeric)  
+
+#--------------------------------
+#   Missing data pattern check  
+#--------------------------------
+# library(smdi)
+# res <- smdi_rf(data = data,
+#                set_seed = 2025,
+#                ntree=1000,
+#                n_cores=2)
+# Interpretation : AUC ~> 0.5 = MCAR, AUC ~> 1 = MNAR 
+
+#################
+#sapply(data, function(x) {table(x, useNA = "always")})
+#################
+
+# library(purrr)
+# # Results' dataframe
+# rf_results_df <- map_dfr(res, ~ .x$rf_table) #map_dfr() :  row bind
+# rf_results_df <- rf_results_df %>%
+#   mutate(rf_auc = as.numeric(rf_auc)) %>%
+#   arrange(rf_auc)
+# 
+# # Visualisation of results
+# ggplot(rf_results_df, aes(x = reorder(covariate, rf_auc), 
+#                           y = rf_auc)) +
+#   geom_bar(stat = "identity", fill = "skyblue") +
+#   coord_flip() + 
+#   labs(
+#     x = "Covariates",
+#     y = "AUC (Random Forest)",
+#     title = "Missing data mechanism test"
+#   ) +
+#   theme_minimal()
+
+#------------------------------------
+# Missing data pattern visualisation 
+#-------------------------------------
+# 0. Find variables with missing values
+missing_summary <- data %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+# Get names of variables with missing data
+vars_with_missing <- missing_summary$variable
+vars_with_missing <-  vars_with_missing[-c(2,3)] ; vars_with_missing
+
+# 1. Monotonicity : monotone vs non monotone
+md.pattern(data[,vars_with_missing], plot = TRUE,
+           rotate.names = TRUE)
+# - each row corresponds to a missing pattern(1= observed, 0= missing)
+# - last column and row containes row and column counts, respectively 
+
+# 2. influx and outflux of multivariate missing data patterns 
+mice::flux(data[,vars_with_missing])
+# - statistics of the missing data pattern : influx and outflux -> selecting predictors that sould go into the imputation model
+# - influx : number of variables pairs (missing/total number of observed data cells, observation/total number of observed data cells), depending on the proportion of missing data of the variable => completely observed influx = 0 <-> completely missing 1
+# - outflux : variable with higher outflux is better connected to the missing data, and thus potentially more useful for imputing other variables 
+# - FICO : outbound statistic defined by the fraction of incomplete cases among cases with observed 
+
+# 2-1. Visualization : Fluxplot of the missing data pattern 
+mice::fluxplot(
+  data = data[,vars_with_missing],
+  local = names(data[,vars_with_missing]),
+  plot = TRUE,
+  labels = TRUE,
+  xlim = c(0, 1),
+  ylim = c(0, 1),
+  las = 1,
+  xlab = "Influx",
+  ylab = "Outflux",
+  main = paste("Influx-outflux pattern for",
+               deparse(substitute(data[,vars_with_missing]))),
+  eqscplot = TRUE)
+
+#---------------------------------
+#    Imputation of missing data 
+#---------------------------------
+library(missForest) # Non parametric Missing Value Imputation using Random Forest
+library(mice)
+
+# data <- data %>% 
+#   dplyr::select()
+# imp_mar <- mice(df_clean, m = 5, seed = 2025, printFlag = FALSE)
+```
+
+## III. Imputation of missing data 
+
+### - MissForest (Simple imputation)
+
+```{r}
+library(missForest)
+#-------------------------------------------------
+#   Define the data without outcomes variables
+#-------------------------------------------------
+data <- df_final_complic_perID_mod2 %>% 
+  dplyr:: select(-total_complications_bin_perID,
+                 -total_complications_cat_perID,
+                 -Complications_cat_perID_grouped)
+
+#--------------------------------
+# missForest : Simple imputation
+#--------------------------------
+# 1. Prepare data types
+# 1-1) Check 
+sapply(data, class)
+# 1-2) Transform all ordinal factor to factor 
+df_clean <- data.frame(lapply(data, function(x) {
+  if (is.factor(x)) {
+    return(as.factor(as.character(x)))
+  } else if (is.numeric(x) || is.integer(x)) {
+    return(x)
+  } else {
+    return(as.factor(as.character(x)))
+  }
+}))
+# 1-3) Recheck 
+#sapply(df_clean, class)
+
+# # 2. Find a optimal number of trees
+# ntree_vals <- c(50, 100, 200, 300)
+# results <- data.frame(ntree = ntree_vals, NRMSE = NA, PFC = NA)
+# set.seed(2025)
+# df_clean.mis <- prodNA(df_clean, noNA = 0.1)
+# for (i in 1:length(ntree_vals)) {
+#   res <- missForest(df_clean.mis, ntree = ntree_vals[i])
+#   results$NRMSE[i] <- res$OOBerror[1]
+#   results$PFC[i] <- res$OOBerror[2]
+# }
+# print(results)
+# # ntree = 200 -> the minimal PFC = 0.1371020
+
+# 3. Apply MissForest to the dataframe with the optimal number of trees
+set.seed(2025)
+imputed_result <- missForest(df_clean, ntree = 200)
+imputed_data <- imputed_result$ximp
+
+# 4. Check
+#sapply(imputed_data, function(x) sum(is.na(x)))
+
+# 5. Remove 'df_clean'
+rm(df_clean); rm(df_clean.mis)
+
+# 5. Compare the original data vs imputed data
+for (var in names(imputed_data)) {
+  cat("\n=== Variable:", var, "===\n")
+  cat("Original distribution:\n")
+  print(table(data[[var]], useNA = "always"))
+  cat("After imputation:\n")
+  print(table(imputed_data[[var]], useNA = "always"))
+}
+```
+
+#### => Save the imputed dataset
+
+```{r}
+# update : 2025-06-06
+#----------------------------
+# Save the imputed dataset
+#----------------------------
+# Re-add outcome variables into imputed dataframe  
+outcomes <- df_final_complic_perID_mod2 %>% 
+  dplyr::select(total_complications_bin_perID,
+         total_complications_cat_perID)
+
+# Imputed predictor + original outcome
+imputed_data_O3_perID <- bind_cols(imputed_data,
+                                      outcomes)
+
+imputed_data_O3_perID <- imputed_data_O3_perID %>% 
+  dplyr::select(-ends_with("_participated"))
+
+# Remove the imputed data
+rm(imputed_data)
+
+# Check
+str(imputed_data_O3_perID)
+
+# Save
+write.csv(imputed_data_O3_perID,"Stage_M2_Complic_Gross/imputed_data_O3_perID.csv")
+```
+
+
+### <TEST> - MICE
+```{r}
+library(mice)
+data <- df_final_complic_perID_mod2 %>% 
+  dplyr:: select(-total_complications_bin_perID,
+                 -total_complications_cat_perID,
+                 -Complications_cat_perID_grouped)
+
+# 0. Find variables with missing values
+missing_summary <- data %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_count))
+# Get names of variables with missing data
+vars_with_missing <- missing_summary$variable
+
+# 1. NA counts check
+missing_counts <- sapply(data[, vars_with_missing],
+                         function(x) sum(is.na(x)))
+print(missing_counts)
+
+# 2. selection of variables having NA values
+vars_missing <- names(missing_counts[missing_counts > 1])
+
+# 3. automatic selecting methods in terms of type of variables 
+imp_methods <- sapply(data[, vars_missing], function(x) {
+  if (is.factor(x)) {
+    if (nlevels(x) == 2) return("logreg")
+    else return("polyreg")
+  } else {
+    return("pmm")
+  }
+})
+
+# 4. Imputation 
+imp_seq <- mice(impute_data[, vars_missing],
+                method = imp_methods,
+                m = 5,
+                maxit = 20,
+                seed = 2025,
+                printFlag = FALSE)
+
+# 5. Complete dataset 
+complete_data <- complete(imp_seq,1)
+
+# 6. Check the structure of completed dataset
+str(complete_data) # 구조 확인
+sapply(complete_data, function(x) summary(x))
+
+# 7. Imputation 품질 검증
+  for(var in names(complete_data)) {
+    cat("\n=== Variable:", var, "===\n")
+    cat("Original distribution:\n")
+    print(table(data[[var]], useNA = "always"))
+    cat("After imputation:\n")
+    print(table(complete_data[[var]], useNA = "always"))
+  }
+```
+
+
+
+
+
+
