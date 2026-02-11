@@ -1,0 +1,992 @@
+---
+title: "01_clean_comorbidités"
+author: "Minji NAM"
+date: "2025-05-13"
+output: html_document
+---
+
+*Name* : 01_clean_comorbidités
+*Project* : Santé reproductive, infertilité et **complications de la grossesse** chez les femmes atteintes d'endométriose
+*Description* : Preprocessing Data for the comorbidity information 
+*Date of creation* : 2025-05-13
+*Date of update* : 2025-06-02
+*Author* : Minji NAM, stagiaire M2 Big Data in Health
+*R version* : R version 4.4.2
+
+---
+
+$Libraries$
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tableone)
+library(nnet)
+library(broom)
+library(gtsummary)
+library(rlang) 
+library(labelled)
+library(questionr)
+library(guideR)
+library(jmv)
+library(nnet)
+library(stringi)
+```
+
+# 0. Import raw data : pop_demo_inclusion 
+- nb_maladie, IdDisease, DiseaseNotFound
+
+```{r}
+#-----------------------
+# Import a main dataset
+#-----------------------
+# pop_comorbidite <-
+#   read.csv("~/Projet/0.Data/complication_pop_comorbidite_20250226.csv",fileEncoding = "latin1",colClasses = c(Sexe = "character"))
+
+pop_comorbidite <-
+  read.csv("Complic_pop_comorbidite_20250407.csv",
+           fileEncoding = "latin1",
+           colClasses = c(Sexe = "character"))
+
+#------------------------------------------------
+# Replace cells with nothing or spaces with NA
+#------------------------------------------------
+pop_comorbidite <-
+  pop_comorbidite %>% mutate(across(everything(), ~ na_if(trimws(.), ""))) %>% 
+  mutate_all(~str_trim(.))
+
+#---------------------
+#  char -> numeric
+#---------------------
+pop_comorbidite$nb_maladie <-
+  as.numeric(pop_comorbidite$nb_maladie)
+
+#-----------------------------------------------------
+# Replace non-standard apostrophes with standard ones 
+#-----------------------------------------------------
+pop_comorbidite <- pop_comorbidite %>%
+    mutate(
+    across(where(is.character), ~ gsub("\u009c", "œ", .)),
+    across(where(is.character), ~ gsub("\u0092", "'", .)),
+    across(where(is.character), ~ gsub("\u0085", "", .))
+  )
+# \u0092 : a non-standard apostrophe, \u0085: an unusual line break character, "\u009c" : control character(String Terminator(ST))
+```
+
+# I. Preprocessing Data
+## 1) IdDisease
+```{r}
+# List of comobidities
+list_com <- pop_comorbidite$IdDisease %>% unique
+
+# Create different categories of comorbidities
+# Endométriose/Adénomyose
+endometriose_adenomyose <- c("Endométriose", "Adénomyose")
+
+# Gynécologique
+gynecologique <- c(
+  "Fibrome utérin",
+  "Kyste ovarien, syndrome des ovaires polykystiques (SOPK)",
+  "Trouble de la fertilité"
+)
+
+# Endocrino-métabolique (Hormonal and metabolic disorders)
+endocrine_metabolic <- c(
+  "hypercholestérolémie / hypertriglycéridémie",
+  "Hyperprolactinémie",
+  "Autre maladie endocrinienne",
+  "Syndrome de Cushing",
+  "Hypoparathyroidie chronique",
+  "Diabète insipide",
+  "Hyperaldostéronisme primaire",
+  "Maladie de Basedow",
+  "Autre Hyperthyroïdie",
+  "Maladie d'Addison (insuffisance surrénalienne)",
+  "Adénome hypophysaire",
+  "Maladie de Gilbert",
+  "Hypothyroïdie",
+  "Diabète",
+  "Obésité (Indice de Masse Corporelle>30)",
+  "Syndrome de Turner",
+  "Anémie de Biermer (anémie mégaloblastique, anémie pernicieuse)",
+  "Déficit en facteur de coagulation/troubles de la coagulation"
+)
+
+# Neuro_pain (Nervous system disorder and chronic pain conditions)
+neuro_pain <- c(
+  "Trouble du déficit de l'attention/hyperactivité (TDAH)",
+  "Fibromyalgie",
+  "Vertiges",
+  "Algie vasculaire de la face",
+  "Antécédent d'accident vasculaire cérébral (AVC)",
+  "Autre maladie neurologique",
+  "Syndrome des jambes sans repos",
+  "Syndrome douloureux régional complexe (SDRC 1 ou algodystrophie et SDCR 2 ou algoneurodystrophie)",
+  "Céphalées chroniques (dont migraine)",
+  "Autres syndromes parkinsoniens",
+  "Epilepsie",
+  "Autres démences",
+  "Narcolepsie / Maladie de Gelineau",
+  "Algies du trijumeau (névralgies essentielles, douleurs neuropathiques du nerf trijumeau)",
+  "Syndrome de la queue de cheval",
+  "Syringomyélie",
+  "Neuropathie périphérique",
+  "Autisme",
+  "Malformation d'Arnold-Chiari",
+  "Trouble stomatologique ou maxillofacial (SADAM)",
+  "Kystes de Tarlov, kyste péri-radiculaire, kyste méningé sacré",
+  "Maladie de Charcot-Marie-Tooth",
+  "Névralgie d'Arnold"
+)
+
+# Cardio_circulatory (Heart and blood vessel disorders)
+cardio_circulatory <- c(
+  "Hypertension artérielle",
+  "Troubles du rythme cardiaque (y compris Maladie de Bouveret)",
+  "Antécédent d'accident ischémique transitoire (AIT)",
+  "Antécédent d'infarctus du myocarde",
+  "Insuffisance veineuse chronique",
+  "Artérite/sténose carotidienne/artériopathie oblitérante des membres inférieurs",
+  "Hypertension artérielle pulmonaire",
+  "Antécédent de phlébite ou d'embolie pulmonaire",
+  "Arythmie cardiaque par fibrillation auriculaire : ACFA",
+  "Angor/angine de poitrine/coronaropathie/maladie coronarienne (sans infarctus du myocarde)",
+  "Insuffisance cardiaque",
+  "Autre maladie cardiaque ou vasculaire",
+  "Valvulopathie, Remplacement valvulaire (y compris Maladie de Barlow)",
+  "Trouble de conduction (Pace Maker)",
+  "Cardiopathie congénitale",
+  "Endocardite",
+  "Syndrome de Wolff-Parkinson-White"
+)
+
+# Respiratory (Lung and airway disorders)
+respiratory <- c(
+  "Asthme",
+  "Sinusite chronique",
+  "Polypose naso-sinusiennes",
+  "Bronchite chronique, broncho pneumopathie chronique obstructive (BPCO), emphysème",
+  "Rhinite chronique",
+  "Dilatation des bronches",
+  "Apnée du sommeil"
+)
+
+# Uro_nephro (Renal and urinary disorders)
+uro_nephro <- c(
+  "Lithiase urinaire chronique (calculs rénaux)",
+  "Incontinence urinaire",
+  "Autre maladie rénale, urinaire ou génitale",
+  "Cystites redicivantes",
+  "Insuffisance rénale chronique",
+  "Polykystose rénale",
+  "Maladie de Berger",
+  "Maladie de Cacchi et Ricci"
+)
+
+# Gastrointestinal (Digestive system disorders)
+gastrointestinal <-
+  c(
+    "Reflux gastro oesophagien, achalasie, hernie hiatale",
+    "Colon irritable / Colopathie fonctionnelle",
+    "Ulcère gastro duodénal, gastrite chronique",
+    "Maladie de Crohn",
+    "Rectocolite hémorragique (RCH)",
+    "Maladie coeliaque",
+    "Diverticules",
+    "Autre maladie du système digestif",
+    "Stéatose hépatique (NASH)",
+    "Hépatite/Cirrhose auto-immune",
+    "Insuffisance pancréatique (pancréatite chronique)",
+    "Hépatite B",
+    "Hépatite C",
+    "Autre maladie du foie"
+  )
+
+# Musculoskeletal (Bone, Joint, and muscle disorders)
+musculoskeletal <- c(
+  "Scoliose",
+  "Autre maladie rhumatologique",
+  "Ostéoporose / Ostéopénie",
+  "Arthrose",
+  "Tendinites chroniques (périarthrite, épicondylite, capsulite...)",
+  "Polyarthrite rhumatoïde",
+  "Rhumatisme psoriasique",
+  "Arthropathies microcristallines (goutte, chondrocalcinose)",
+  "Infection ostéo-articulaire (arthrite/spondylodiscite)",
+  "Épine Calcanéenne",
+  "Syndromes canalaires (Syndrome du canal carpien, Syndrome de la loge de Guyon)",
+  "Maladie de Dupuytren",
+  "Névrome de Morton",
+  "Lombalgie chronique (douleur du bas du dos, hernie discale lombaire, sciatique)",
+  "Cervicalgie chronique, dorsalgie chronique (douleur du haut du dos, hernie discale cervicale, hernie discale dorsale)",
+  "Epine Calcanéenne"
+)
+
+# Autoimmune_inflammatory (Inflammatory Disorders)
+autoimmune_inflammatory <- c(
+  "Maladie de Lyme",
+  "Maladie de Raynaud",
+  "Syndrome de Goujerot-Sjögren",
+  "Allergie",
+  "Thyroïdite d'Hashimoto",
+  "Lupus",
+  "Mastocytose, syndrome d'activation mastocytaire (SAMA)",
+  "Déficit immunitaire (hors VIH)",
+  "Anémie hémolytique auto-immune",
+  "Purpura thrombopénique immunologique",
+  "Syndrome des antiphospholipides",
+  "Maladie de Behçet",
+  "Vascularite cryoglobulinémique",
+  "Maladie de Still de l'adulte",
+  "Myélome (gammapathie monoclonale, MGUS, plasmocytome, maladie de Waldenström)",
+  "Autre maladie systémique",
+  "Syndrome de Cogan",
+  "Syndrome de fatigue chronique (Encéphalomyélite myalgique)",
+  "Spondyloarthrite axiale (anciennement spondylarthrite ankylosante)",
+  "Sarcoïdose",
+  "Lichen plan"
+)
+
+# Mental_health (Mental and behavioral disorders)
+mental_health <-
+  c(
+    "Troubles obsessionnels compulsifs :  TOC",
+    "Troubles anxieux",
+    "Dépression",
+    "Trouble du comportement alimentaire (anorexie, boulimie)",
+    "Addictions (alcool, jeux, autres drogues...)",
+    "Syndrome de stress post traumatique",
+    "Syndrome de fatigue chronique",
+    "Troubles du sommeil",
+    "Trouble de la personnalité",
+    "Psychose chronique (schizophrénie...)",
+    "Autre maladie psychiatrique",
+    "Trouble bipolaire, maladie maniaco-dépressive"
+  )
+
+# Dermatological (Skin disorders)
+dermatological <- c(
+  "Dyshidrose",
+  "Vitiligo",
+  "Dyshydrose",
+  "Dermatose bulleuse chronique",
+  "Zona",
+  "Eczéma (dermatite atopique)",
+  "Psoriasis",
+  "Autre maladie de la peau",
+  "Dermatite séborrhéique",
+  "Urticaire",
+  "Rosacée",
+  "Pelade",
+  "Acné",
+  "Maladie de Verneuil / hidradénite suppurée"
+)
+
+# Ophtalmo (Ophthalmologic disorders)
+ophtalmo <-
+  c(
+    "Trouble de la vision (myopie, presbytie, astigmatisme)",
+    "Cataracte",
+    "Dégénérescence maculaire (DMLA)",
+    "Rétinopathie",
+    "Glaucome chronique",
+    "Autre maladie des yeux",
+    "Décollement de rétine ou décollement du vitré"
+  )
+
+# ORL_auditif (ORL and auditory disorders)
+ORL_auditif <- c("Troubles de l'audition / surdité/ acouphènes",
+                 "Rhinite chronique",
+                 "Otospongiose",
+                 "Vertiges (Maladie de Menière, vertige paroxystique positionnel bénin)",
+                 "Autre maladie ORL ou respiratoire")
+
+# Hemato (Hematologic disorders)
+hemato <- c(
+  "Leucémie lymphoïde chronique",
+  "Autres hémolyses constitutionnelles (thalassémies, sphérocytose)",
+  "Drépanocytose",
+  "Hémophilie",
+  "Maladie de Willebrand",
+  "Leucémie myéloïde chronique",
+  "Autre maladie du sang",
+  "Syndrome myéloprolifératif (polyglobulie, maladie de Vaquez, thrombocytémie essentielle, myélofibrose primitive)"
+)
+
+# Oncological (Oncologic disorders)
+oncological <- c(
+  "Cancer du col de l'utérus",
+  "Cancer du rein",
+  "Cancer du sein",
+  "Cancer de la peau de type Carcinome baso-cellulaire",
+  "Mélanome",
+  "Autre cancer",
+  "Cancer du rectum",
+  "Cancer du rein",
+  "Polypes coliques",
+  "Cancer de la thyroïde"
+)
+
+# Infectious (Infectious Disorders)
+infectious <- c(
+  "Covid-19 (AVEC symptômes persistants)",
+  "Covid-19 aigue (SANS symptôme persistant)",
+  "Autre maladie infectieuse chronique",
+  "Herpes",
+  "Tuberculose"
+)
+
+# Other
+other <- c(
+  "Sclérose en plaque",
+  "NA",
+  "Spina bifida",
+  "Hypersensibilité chimique multiple - MCS",
+  "Lymphoedème",
+  "Meningiome",
+  "Sclérodermie",
+  "Myasthénie",
+  "Syndrome de Marfan",
+  "Neurofibromatose de type 1 (NF1) ou maladie de Von Recklinghausen",
+  "Hémochromatose",
+  "Myopathie génétique",
+  "Malformations artérioveineuses cérébrales",
+    "Syndrome d'Ehlers Danlos"
+)
+
+# Create new dataframe from the created list of categories
+all_comorbidities <-
+  c(
+    endometriose_adenomyose,
+    gynecologique,
+    endocrine_metabolic,
+    neuro_pain,
+    cardio_circulatory,
+    respiratory,
+    uro_nephro,
+    gastrointestinal,
+    musculoskeletal,
+    autoimmune_inflammatory,
+    mental_health,
+    dermatological,
+    ophtalmo,
+    ORL_auditif,
+    hemato,
+    oncological,
+    infectious,
+    other
+  )
+df_comorbidites <- data.frame(comorbidite = unique(all_comorbidities))
+
+# Create new vide variable with NA
+df_comorbidites$categorie <- NA
+
+# Fill the new variable (categorie) 
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% endometriose_adenomyose] <-
+  "Endométriose/Adénomyose"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% gynecologique] <-
+  "Gynécologique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% endocrine_metabolic] <-
+  "Endocrino-métabolique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% neuro_pain] <-
+  "Neurologique et Douleurs chroniques"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% cardio_circulatory] <-
+  "Cardiovasculaire"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% respiratory] <-
+  "Respiratoire"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% uro_nephro] <-
+  "Uro-néphrologique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% gastrointestinal] <-
+  "Gastro-intestinal"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% musculoskeletal] <-
+  "Musculo-squelettique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% autoimmune_inflammatory] <-
+  "Inflammatoire"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% mental_health] <-
+  "Santé mentale"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% dermatological] <-
+  "Dermatologique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% ophtalmo] <-
+  "Ophtalmologique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% ORL_auditif] <-
+  "ORL et Auditif"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% hemato] <-
+  "Hématologique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% oncological] <-
+  "Oncologique"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% infectious] <-
+  "Infectieuse"
+df_comorbidites$categorie[df_comorbidites$comorbidite %in% other] <-
+  "Autre"
+
+names(df_comorbidites)[1] <- "IdDisease"
+
+pop_comorbidite <- pop_comorbidite %>% 
+  left_join(df_comorbidites, by = "IdDisease")
+
+pop_comorbidite <- pop_comorbidite %>%
+  mutate(categorie = case_when(
+    is.na(categorie)&str_detect(IdDisease, "^hypercholes") ~ "Endocrino-métabolique",  
+    is.na(categorie)&str_detect(IdDisease, "^Troubles obsession") ~ "Santé mentale",
+    TRUE ~ categorie  
+  ))
+```
+
+
+## 2) DiseaseNotFound 
+: 160 maladies différentes it's doable 
+
+```{r}
+list_dis <- pop_comorbidite$DiseaseNotFound %>% 
+  tolower() %>% 
+  unique() %>% 
+  as.vector()
+
+#1. Make some lists of diseases in terms of categories of diseases
+# Endométriose/Adénomyose
+endometriose_adenomyose <-
+  c(
+    "endométriose digestive",
+    "endométriose broncho-pulmonaire",
+    "endométriose rectale",
+    "adénomyose",
+    "endometrite chronique",
+    "diagnostiquée sous une forme d'endométriose de 2014 à 2019 (mauvais diagnostic)",
+    "l'endometriose",
+    "endometriose"
+  )
+
+# Gynecologique
+gynecologique <-
+  c(
+    "infertilité",
+    "syndrome douloureux pelvien chronique",
+    "insuffisance ovarienne",
+    "insuffisance ovarienne précoce",
+    "insuffisance ovarienne précose",
+    "syndrome de congestion pelvienne",
+    "syndrome vésical douloureux",
+    "trouble dysphorique prémenstruel",
+    "endosalpyngiose",
+    "incompetence cervicale",
+    "hypersensibilité pelvienne",
+    "cogestions pelviennes - varices utérines",
+    "prolapsus",
+    "syndrome de congestion pelvienne / varices pelviennes",
+    "hypersensibilité pelvienne et abdominale"
+  )
+
+# Neuro_pain (Nervous system disorder and chronic pain conditions)
+neuro_pain <-
+  c(
+    "neuropathie",
+    "douleur neuropathique séquellaire",
+    "neuropathie à petites fibres",
+    "neuropathie des petites fibres",
+    "persistent postural-perceptual dizziness",
+    "névrite vestibulaire",
+    "dysphonie spasmodique",
+    "migraine ophtalmique",
+    "spasmophilie",
+    "tsa",
+    "htic idiopathique",
+    "blépharospasme",
+    "hypertension intracranienne idiopathique.",
+    "hypertension intracrânienne idiopathique",
+    "névralgie cervico brachiale",
+    "névralgie pudendale",
+    "névralgie inguinale",
+    "douleurs neuropathiques et névralgies multiples",
+    "leucopathie vasculaire fazekas 1",
+    "névralgie cervico-bracciale",
+    "neuropathie membres inférieurs",
+    "leucopathie vasculaire",
+    "syndrome de sensibilité centrale"
+    
+  )
+
+# Cardio_circulatory (Heart and blood vessel disorders)
+cardio_circulatory <-
+  c(
+    "arrêt cardiaque sans cause déterminée",
+    "hypertension intracrânienne idiopathique",
+    "varices pelviennes bilatérales",
+    "varices pelviennes",
+    "varices orbitaires",
+    "syndrome des anticorps anti phospholipides",
+    "mesotheliome peritoneal",
+    "varices pelviennes bilatérales",
+    "péricardite",
+    "pericardite",
+    "myocardite",
+    "trouble de la conduction",
+    "syndrome de tachycardie orthostatique posturale",
+    "tachycardie sinusale inappropriée"
+  )
+
+# Respiratory (Lung and airway disorders)
+respiratory <-
+  c("trouble ventilatoire restrictif",
+    "hypoxie sévère diurne et nocturne")
+
+# Autoimmune_inflammatory (Inflammatory Disorders)
+autoimmune_inflammatory <-
+  c(
+    "maladie auto immune inflammatoire non étiquetée",
+    "lupus anticoagulant circulant",
+    "maladie auto immune d hashimoto",
+    "maladie auto immune d hashimoto"
+  )
+
+# Uro_nephro (Renal and urinary disorders)
+uro_nephro <- c(
+  "rétention urinaire",
+  "hyperactivité de la vessie",
+  "rein atrophié sans insuffisance rénale",
+  "rétention urinaire chronique",
+  "cystite interstitielle"
+)
+
+# Gastrointestinal (Digestive system disorders)
+gastrointestinal <-
+  c(
+    "syndrome du côlon irritable",
+    "syndrôme de l'intestin irritable",
+    "colite lymphocytaire",
+    "intolérance alimentaire",
+    "œsophagite à éosinophile",
+    "gastrite chronique",
+    "iléite chronique",
+    "malabsorption",
+    "dyskinésie billiare",
+    "hyperplasies nodulaires focales",
+    "intolérance alimentaire",
+    "syndrome de l'intestin irritable",
+    "malformation anale",
+    "constipation",
+    "intolérance au lactose",
+    "panniculite mésentérique",
+    "œsophage en marteau piqueur",
+    "maladie hémorroïdaire"
+  )
+
+# Musculoskeletal (Bone, Joint, and muscle disorders)
+musculoskeletal <-
+  c(
+    "discopathie cervicales",
+    "discopathie cervical",
+    "tendino bursite du supra épineux",
+    "hernie discale l5-s1",
+    "syndrôme rotulien",
+    "chondropathie fémoro patellaire",
+    "enthésopathie calcifiante",
+    "dysplasie congénitale des hanches",
+    "synovite villo nodulaire",
+    "arthrose (légère) des vertèbres dorsales",
+    "bursite",
+    "bruxisme",
+    "trouble de la colone verterbrale",
+    "dysplasie fibreuse du clivus",
+    "periartrites calcifiantes épaules",
+    "maladie de hoffa",
+    "fibromyalgie",
+    "maladie de la graisse de hoffa (genou)",
+    "sacroilite",
+    "syndrome du défilé thoraco-brachial",
+    "polyrhumatisme inflammatoire"
+  )
+
+# Mental_health (Mental and behavioral disorders)
+mental_health <-
+  c(
+    "trouble anxieux-dépressif",
+    "depression post partum",
+    "burn out",
+    "trouble du comportement alimentaire",
+    "tag",
+    "hypersomnie"
+  )
+
+# Dermatological (Skin disorders)
+dermatological <-
+  c(
+    "dermatite atopique",
+    "lichen scléro-atrophique",
+    "dermographisme",
+    "morphée",
+    "syndrôme de sweet"
+  )
+
+
+# Endocrino-métabolique (Hormonal and metabolic disorders)
+endocrine_metabolic <-
+  c(
+    "hyperinsulinisme",
+    "hyperthyroïdie",
+    "hyperthyroïdie par autonomisation thyroïdienne",
+    "hypothyroïdie",
+    "insuffisance hypophysaire",
+    "cortisol bas",
+    "lipoedème",
+    "lipœdème",
+    "lipodoeme",
+    "éctopie thyroïdienne",
+    "diabète gestationnel",
+    "hyperthyroidie"
+  )
+
+# Ophtalmo (Ophthalmologic disorders)
+ophtalmo <- c("keratite", "photosensibilité suite kératite")
+
+# ORL_auditif (ORL and auditory disorders)
+ORL_auditif <-
+  c("hyperaccousie",
+    "hypertrophie des cornets",
+    "laryngite chronique")
+
+# Hemato (Hematologic disorders)
+hemato <- c("méthémoglobinémie",
+            "leiden facteur ii")
+
+# Oncological (Oncologic disorders)
+oncological <- c("tumeur gist",
+                 "carcinome chromophobe du rein",
+                 "cancer du sein métastatique",
+                 "cancer du sein métastatique")
+
+
+# Infectious (Infectious Disorders)
+infectious <-
+  c("mononucléose à cytomégalovirus", 
+    "toxoplasmose congénitale")
+
+# Other
+other <-   c(
+  "fibromes et kystes aux seins",
+  "syndrome de gardner",
+  "mutation génétique de type brca2",
+  "nouvelle maladie",
+  "syndrome de lynch",
+  "cytolyse hepatique chronique",
+  "parodontie",
+  "syndrome d'ehlers-danlos",
+  "fibroadénomatose bilatérale (prédominante au  niveau du sein gauche)",
+  "congestation",
+  "hydrocéphalie",
+  "parondontite",
+  "syndrome d'hypersensibilité chimique multiple",
+  "hypersensibilité chimique multiple",
+  "parodontite",
+  "mih - hypominéralisation des molaires et des incisives",
+  "polypose adénomateuse familiale",
+  "syndrome d'elhers danlos hypermobile",
+  "hallux  valgus"
+)
+
+# 2. Create new dataframe from the created list of categories
+all_comorbidities_other <-
+  c(
+    endometriose_adenomyose,
+    gynecologique,
+    endocrine_metabolic,
+    neuro_pain,
+    cardio_circulatory,
+    respiratory,
+    uro_nephro,
+    gastrointestinal,
+    musculoskeletal,
+    autoimmune_inflammatory,
+    mental_health,
+    dermatological,
+    ophtalmo,
+    ORL_auditif,
+    hemato,
+    oncological,
+    infectious,
+    other
+  )
+
+# 3. Create a dataframe for a list of diseases and their categories 
+df_comorbidites_other <- data.frame(comorbidite = unique(all_comorbidities_other))
+
+# 4. Create new vide variable with NA
+df_comorbidites_other$categorie <- NA
+
+# 5. Fill the new variable (categorie) 
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% endometriose_adenomyose] <-
+  "Endométriose/Adénomyose"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% gynecologique] <-
+  "Gynécologique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% endocrine_metabolic] <-
+  "Endocrino-métabolique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% neuro_pain] <-
+  "Neurologique et Douleurs chroniques"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% cardio_circulatory] <-
+  "Cardiovasculaire"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% respiratory] <-
+  "Respiratoire"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% uro_nephro] <-
+  "Uro-néphrologique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% gastrointestinal] <-
+  "Gastro-intestinal"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% musculoskeletal] <-
+  "Musculo-squelettique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% autoimmune_inflammatory] <-
+  "Inflammatoire"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% mental_health] <-
+  "Santé mentale"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% dermatological] <-
+  "Dermatologique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% ophtalmo] <-
+  "Ophtalmologique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% ORL_auditif] <-
+  "ORL et Auditif"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% hemato] <-
+  "Hématologique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% oncological] <-
+  "Oncologique"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% infectious] <-
+  "Infectieuse"
+df_comorbidites_other$categorie[df_comorbidites_other$comorbidite %in% other] <-
+  "Autre"
+
+# 6. Modifie a name of variable 'comorbidite' like "DiseaseNotFound"
+names(df_comorbidites_other)[1] <- "DiseaseNotFound"
+
+# 7. Put categories created to the main dataset "pop_comorbidite"
+pop_comorbidite <- pop_comorbidite %>%
+  mutate(DiseaseNotFound= tolower(DiseaseNotFound)) %>% 
+  left_join(df_comorbidites_other, by = "DiseaseNotFound") %>%
+  mutate(categorie = 
+           if_else(!is.na(categorie.y), 
+                   categorie.y, categorie.x)) %>% 
+  dplyr::select(-categorie.x, -categorie.y)
+```
+
+
+## 3) Creating new variables
+
+```{r}
+#----------------------------------------------------------------
+# Number of comorbidities without endometriosis and adenomyosis
+#----------------------------------------------------------------
+pop_comorbidite_mod <- pop_comorbidite %>% 
+  group_by(id_unik) %>% 
+  mutate(
+    nb_mal_sansEndoAde = case_when(
+      IdDisease == "Endométriose" & !("Adénomyose" %in% IdDisease) ~ 
+        nb_maladie - 1,
+      IdDisease == "Adénomyose" & !("Endométriose" %in% IdDisease) ~ 
+        nb_maladie - 1,
+      "Endométriose" %in% IdDisease & "Adénomyose" %in% IdDisease ~ 
+        nb_maladie - 2,
+      TRUE ~ nb_maladie
+    ),
+ 
+    # New variable : Endometriosis, Adenomyosis, Two
+    endo_ade_categorie = case_when(
+      "Endométriose" %in% IdDisease & "Adénomyose" %in% IdDisease ~ 
+        "Both",
+      "Endométriose" %in% IdDisease & !("Adénomyose" %in% IdDisease) ~ 
+        "Only endometriosis",
+      "Adénomyose" %in% IdDisease & !("Endométriose" %in% IdDisease) ~ 
+        "Only adenomyosis",
+      TRUE ~ "Aucun"
+    )
+  ) %>% 
+  slice_tail(n = 1) %>% 
+  ungroup() %>% 
+  dplyr::select(id_unik, nb_mal_sansEndoAde, endo_ade_categorie) %>% 
+  right_join(pop_comorbidite, by="id_unik")
+
+#-------------------------------------------
+#   Comorbidity in binary and categorical
+#-------------------------------------------
+pop_comorbidite_mod <-  pop_comorbidite_mod %>% 
+  mutate(
+    comorbidite_bin=ifelse(nb_mal_sansEndoAde==0,"Non","Oui"),
+    
+    nb_mal_sansEndoAde_cat= cut(
+      nb_mal_sansEndoAde,
+      breaks= c(-Inf, 0, 1, Inf),
+      labels = c("0", "1", "2 ou plus"),
+      right=TRUE, 
+      ordered_result = TRUE)
+    )
+
+#--------------------------------------
+# Comorbidity : Obesity , Diabete, HTA
+#---------------------------------------
+#US National Cholesterol Education Program (NCEP):  Adult Treatment Panel (ATP) III report 
+pop_comorbidite_mod <- pop_comorbidite_mod %>%
+  group_by(id_unik) %>%
+  mutate(
+    metabolic_syndrome = if_else(
+      any(IdDisease %in% c("Diabète", 
+                           "Hypertension", 
+                           "Obésité (Indice de Masse Corporelle>30)",
+                           "hypercholestérolémie / hypertriglycéridémie")
+          ),
+      "Oui",
+      "Non"
+    )
+  ) %>%
+  ungroup()
+
+# #---------------------
+# # Comorbidity : SOPK
+# #---------------------
+# new_dataframe <- pop_comorbidite_mod %>%
+#   group_by(id_unik) %>%
+#   mutate(SOPK = case_when(
+#     any(IdDisease == "Kyste ovarien, syndrome des ovaires polykystiques (SOPK)") ~"Oui",
+#     TRUE ~  "Non")) %>%
+#   ungroup()
+# 
+# pop_comorbidite_mod <- pop_comorbidite_mod %>% 
+#   left_join(new_dataframe %>% distinct(id_unik, SOPK),
+#             by="id_unik")
+# rm(new_dataframe)
+
+#----------------------------------------
+# D'autres gynécologiques comorbidités 
+#----------------------------------------
+pop_comorbidite_mod <- pop_comorbidite_mod %>%
+  group_by(id_unik) %>%
+  mutate(gynecologique_diseases = ifelse(
+    IdDisease %in% c(
+      "Fibrome utérin",
+      "Kyste ovarien, syndrome des ovaires polykystiques (SOPK)"
+    ) |
+      DiseaseNotFound %in% c(
+        "syndrome douloureux pelvien chronique",
+        "insuffisance ovarienne",
+        "insuffisance ovarienne précoce",
+        "insuffisance ovarienne précose",
+        "syndrome de congestion pelvienne",
+        "syndrome vésical douloureux",
+        "trouble dysphorique prémenstruel",
+        "endosalpyngiose",
+        "incompetence cervicale",
+        "hypersensibilité pelvienne",
+        "cogestions pelviennes - varices utérines",
+        "prolapsus",
+        "syndrome de congestion pelvienne / varices pelviennes",
+        "hypersensibilité pelvienne et abdominale"
+      ),
+    "Oui",
+    "Non"
+    ),
+  gynecologique_diseases =
+    case_when(any(gynecologique_diseases=="Oui") ~ "Oui",
+              all(gynecologique_diseases=="Non") ~ "Non",
+              TRUE~ NA_character_)
+  ) %>%
+  ungroup() %>% 
+  distinct()
+
+#-------------------------------
+#    infertility Comorbidity 
+#-------------------------------
+#pop_comorbidite_mod <- pop_comorbidite_mod %>%
+#  group_by(id_unik) %>%
+#  mutate(infertility = case_when(
+#    any(IdDisease=="Trouble de la fertilité")|
+#      any(DiseaseNotFound%in%c("infertilité")) ~
+#      "Oui",
+#    TRUE ~ "Non"
+#  )) %>%
+#  ungroup()
+
+pop_comorbidite_mod <- pop_comorbidite_mod %>% 
+   group_by(id_unik) %>% 
+   mutate(infertility_comorbidite = case_when(
+     any(IdDisease=="Trouble de la fertilité")| 
+      any(DiseaseNotFound == "infertilité") ~
+       "Oui",
+     TRUE ~ "Non"
+   )) %>% 
+   ungroup()
+
+
+
+#-----------------------------
+#     Auto-immune diseases
+#-----------------------------
+autoimmune_list <- unique(
+  c(
+    "Anémie de Biermer (anémie mégaloblastique, anémie pernicieuse)",
+    "Thyroïdite d'Hashimoto",
+    "Syndrome de Goujerot-Sjögren",
+    "Sclérodermie",
+    "Maladie de Basedow",
+    "Lupus",
+    "Maladie de Crohn",
+    "Polyarthrite rhumatoïde",
+    "Psoriasis",
+    "Rhumatisme psoriasique",
+    "Rectocolite hémorragique (RCH)",
+    "Vitiligo",
+    "Syndrome des antiphospholipides",
+    "Maladie de Behçet",
+    "Maladie de Still de l'adulte",
+    "Sclérose en plaque",
+    "Hépatite/Cirrhose auto-immune",
+    "Lichen plan",
+    "Syndrome de Goujerot-Sjögren",
+    "Thyroïdite d'Hashimoto",
+    "Lupus",
+    "Anémie hémolytique auto-immune",
+    "Purpura thrombopénique immunologique",
+    "Syndrome des antiphospholipides",
+    "Maladie de Behçet",
+    "Vascularite cryoglobulinémique",
+    "Syndrome de Cogan",
+    "Sarcoïdose",
+    "maladie auto immune inflammatoire non étiquetée",
+    "lupus anticoagulant circulant",
+    "maladie auto immune d hashimoto"
+  )
+)
+pop_comorbidite_mod <- pop_comorbidite_mod %>%
+  mutate(autoimmune_diseases = 
+           case_when(
+             IdDisease %in% autoimmune_list |
+               DiseaseNotFound %in% autoimmune_list ~ "Oui",
+             TRUE ~ "Non"
+           ))%>%
+  group_by(id_unik) %>%
+  mutate(autoimmune_diseases = 
+           case_when(
+             any(autoimmune_diseases=="Oui") ~"Oui",
+             all(autoimmune_diseases=="Non") ~ "Non",
+             TRUE ~ NA_character_
+             )
+         )%>% ungroup()
+```
+
+
+# II. Final Dataset
+
+```{r}
+pop_comorbidite_final <- pop_comorbidite_mod %>%
+  distinct(id_unik,
+           nb_mal_sansEndoAde,
+           nb_mal_sansEndoAde_cat,
+           endo_ade_categorie,
+           comorbidite_bin,
+           metabolic_syndrome,
+           #SOPK,
+           gynecologique_diseases,
+           infertility_comorbidite,
+           autoimmune_diseases)
+```
+
+# III. Save the final dataframe 
+
+```{r}
+# update : 2025-06-02
+write.csv(pop_comorbidite_final,"Stage_M2_Complic_Gross/pop_comorbidite_final.csv")
+```
+
