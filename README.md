@@ -27,3 +27,8 @@ The study investigates the reproductive journey and pregnancy outcomes of women 
 ├── Data_Merge/              # Logic for merging inclusion & pregnancy datasets
 ├── EDA/                     # Exploratory analysis & data visualization
 └── Statistical_Analysis/    # Final regression models (Logit/Multinominal)
+```
+
+## 📄 Thesis Document
+You can read the full Master's thesis here:
+[👉 Download/View Full Thesis PDF](./Master_Thesis_Minji_NAM.pdf)
